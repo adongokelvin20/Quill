@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
     language?: string;
     research?: boolean;
     targetPages?: number;
+    useSections?: boolean;
   };
 
   try {
@@ -68,6 +69,7 @@ export async function POST(req: NextRequest) {
     lessons: body.lessons ?? Math.min(4, topics.length),
     language: body.language ?? "english",
     targetPages: body.targetPages,
+    useSections: body.useSections ?? true,
   };
 
   // Get the current user (or null for anonymous)

@@ -317,6 +317,7 @@ export function EditorView() {
                 const typeColors: Record<string, string> = {
                   cover: "bg-amber-100 text-amber-700",
                   toc: "bg-blue-100 text-blue-700",
+                  "section-divider": "bg-purple-100 text-purple-700",
                   lesson: "bg-quill/10 text-quill",
                   exercise: "bg-pink-100 text-pink-700",
                   homework: "bg-violet-100 text-violet-700",

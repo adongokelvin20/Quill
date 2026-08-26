@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import {
   ArrowLeft,
@@ -26,6 +27,7 @@ import {
   Layers,
   Zap,
   Minimize2,
+  Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -47,29 +49,37 @@ interface Plan {
   mode: Mode;
   lessons: number;
   totalPages: number;
+  sections: number;
   description: string;
 }
-function computePlan(targetPages: number | null, topicCount: number): Plan {
+function computePlan(targetPages: number | null, topicCount: number, useSections: boolean): Plan {
   if (!targetPages || topicCount === 0) {
+    const sections = useSections ? Math.max(1, Math.ceil(topicCount / 3)) : 0;
     return {
       mode: "full",
       lessons: topicCount,
-      totalPages: FIXED_PAGES + 3 * topicCount,
-      description: "No page limit — full mode (3 pages per lesson).",
+      totalPages: FIXED_PAGES + 3 * topicCount + (useSections ? sections : 0),
+      sections,
+      description: useSections
+        ? `Section-based layout: ${sections} section${sections !== 1 ? "s" : ""}, each with ~3 lessons. Full mode (3 pages per lesson: lesson + exercise + homework).`
+        : "No page limit — full mode (3 pages per lesson).",
     };
   }
-  const available = Math.max(0, targetPages - FIXED_PAGES);
+  const available = Math.max(0, targetPages - FIXED_PAGES - (useSections ? Math.ceil(topicCount / 3) : 0));
   if (available >= 3 * topicCount) {
-    return { mode: "full", lessons: topicCount, totalPages: FIXED_PAGES + 3 * topicCount, description: "Full mode — each lesson gets a lesson page, exercise, and homework." };
+    const sections = useSections ? Math.max(1, Math.ceil(topicCount / 3)) : 0;
+    return { mode: "full", lessons: topicCount, totalPages: FIXED_PAGES + 3 * topicCount + sections, sections, description: "Full mode — each lesson gets a lesson page, exercise, and homework." };
   }
   if (available >= 2 * topicCount) {
-    return { mode: "condensed", lessons: topicCount, totalPages: FIXED_PAGES + 2 * topicCount, description: "Condensed mode — each lesson gets a lesson page + a combined practice & homework page." };
+    const sections = useSections ? Math.max(1, Math.ceil(topicCount / 3)) : 0;
+    return { mode: "condensed", lessons: topicCount, totalPages: FIXED_PAGES + 2 * topicCount + sections, sections, description: "Condensed mode — each lesson gets a lesson page + a combined practice & homework page." };
   }
   if (available >= topicCount) {
-    return { mode: "compact", lessons: topicCount, totalPages: FIXED_PAGES + topicCount, description: "Compact mode — each lesson is a single page with an embedded exercise." };
+    const sections = useSections ? Math.max(1, Math.ceil(topicCount / 3)) : 0;
+    return { mode: "compact", lessons: topicCount, totalPages: FIXED_PAGES + topicCount + sections, sections, description: "Compact mode — each lesson is a single page with an embedded exercise." };
   }
   const fit = Math.max(1, available);
-  return { mode: "compact", lessons: fit, totalPages: FIXED_PAGES + fit, description: `Compact mode (truncated) — only ${fit} of ${topicCount} topics fit in ${targetPages} pages.` };
+  return { mode: "compact", lessons: fit, totalPages: FIXED_PAGES + fit, sections: useSections ? Math.max(1, Math.ceil(fit / 3)) : 0, description: `Compact mode (truncated) — only ${fit} of ${topicCount} topics fit in ${targetPages} pages.` };
 }
 
 const MODE_META: Record<Mode, { label: string; icon: React.ReactNode; color: string }> = {
@@ -90,10 +100,12 @@ export function GeneratorView() {
   const [term, setTerm] = useState<1 | 2 | 3>(1);
   // Step 4
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [customTopics, setCustomTopics] = useState<string>("");
   const [lessons, setLessons] = useState<number>(3);
   const [research, setResearch] = useState<boolean>(true);
   const [targetPages, setTargetPages] = useState<number>(20);
   const [useTargetPages, setUseTargetPages] = useState<boolean>(false);
+  const [useSections, setUseSections] = useState<boolean>(true);
 
   // Reset topics when subject/term/level changes
   useEffect(() => {
@@ -117,10 +129,19 @@ export function GeneratorView() {
     }
   }, [availableSubjects, subject]);
 
+  // Combine curriculum topics + custom topics
+  const allTopics = useMemo(() => {
+    const custom = customTopics
+      .split("\n")
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    return [...selectedTopics, ...custom];
+  }, [selectedTopics, customTopics]);
+
   // Live condensing plan preview
   const plan = useMemo(
-    () => computePlan(useTargetPages ? targetPages : null, selectedTopics.length),
-    [useTargetPages, targetPages, selectedTopics.length]
+    () => computePlan(useTargetPages ? targetPages : null, allTopics.length, useSections),
+    [useTargetPages, targetPages, allTopics.length, useSections]
   );
 
   // Generation state
@@ -142,7 +163,7 @@ export function GeneratorView() {
     if (step === 1) return !!level;
     if (step === 2) return !!subject;
     if (step === 3) return !!term;
-    if (step === 4) return selectedTopics.length > 0;
+    if (step === 4) return allTopics.length > 0;
     return true;
   };
 
@@ -164,10 +185,11 @@ export function GeneratorView() {
           level,
           subject,
           term,
-          topics: selectedTopics,
+          topics: allTopics,
           lessons,
           research,
           targetPages: useTargetPages ? targetPages : undefined,
+          useSections,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -413,15 +435,15 @@ export function GeneratorView() {
             <div>
               <h2 className="font-display text-2xl font-bold text-foreground">Pick the topics</h2>
               <p className="mt-1 text-muted-foreground">
-                Selected: {selectedTopics.length} of {availableTopics.length}. Each topic becomes a lesson.
+                Selected: {allTopics.length} topic{allTopics.length !== 1 ? "s" : ""} ({selectedTopics.length} from curriculum + {allTopics.length - selectedTopics.length} custom).
               </p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setSelectedTopics(availableTopics.slice())}>
-                Select all
+                Select all curriculum
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedTopics([])}>
-                Clear
+              <Button variant="ghost" size="sm" onClick={() => { setSelectedTopics([]); setCustomTopics(""); }}>
+                Clear all
               </Button>
             </div>
           </div>
@@ -454,6 +476,31 @@ export function GeneratorView() {
               );
             })}
           </div>
+
+          {/* Custom topics input */}
+          <Card className="border-amber-300/60 bg-amber-soft/30">
+            <CardContent className="p-4">
+              <Label htmlFor="custom-topics" className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+                <Plus className="h-4 w-4 text-amber-600" />
+                Add your own topics
+              </Label>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Type one topic per line. These will be added to the curriculum topics you selected above.
+              </p>
+              <Textarea
+                id="custom-topics"
+                value={customTopics}
+                onChange={(e) => setCustomTopics(e.target.value)}
+                placeholder={"e.g. The water cycle\nGhanaian independence leaders\nFractions in everyday life"}
+                className="min-h-[100px] text-sm"
+              />
+              {customTopics.trim() && (
+                <p className="mt-2 text-xs text-amber-700">
+                  {customTopics.split("\n").filter((t) => t.trim()).length} custom topic(s) added
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Page count + condensing plan */}
           <Card className="border-quill/20 bg-quill/5">
@@ -552,6 +599,20 @@ export function GeneratorView() {
                 </div>
                 <Switch id="research-toggle" checked={research} onCheckedChange={setResearch} />
               </div>
+
+              {/* Sections toggle */}
+              <div className="flex items-start justify-between gap-3 border-t border-quill/10 pt-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="sections-toggle" className="flex items-center gap-1.5 text-sm font-medium">
+                    <Layers className="h-4 w-4 text-quill" />
+                    Organize into sections (units)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Group every ~3 lessons into a named section with its own divider page. Makes the book easier to navigate.
+                  </p>
+                </div>
+                <Switch id="sections-toggle" checked={useSections} onCheckedChange={setUseSections} />
+              </div>
             </CardContent>
           </Card>
 
@@ -573,12 +634,16 @@ export function GeneratorView() {
                   <span className="font-medium">Term {term}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Topics selected:</span>
-                  <span className="font-medium">{selectedTopics.length}</span>
+                  <span className="text-muted-foreground">Topics (curriculum + custom):</span>
+                  <span className="font-medium">{allTopics.length}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Mode:</span>
                   <span className="font-medium capitalize">{plan.mode}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Sections:</span>
+                  <span className="font-medium">{useSections ? `${plan.sections} section(s)` : "None"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Estimated pages:</span>
@@ -661,7 +726,7 @@ export function GeneratorView() {
         ) : (
           <Button
             onClick={startGeneration}
-            disabled={generating || selectedTopics.length === 0}
+            disabled={generating || allTopics.length === 0}
             className="bg-quill text-quill-foreground hover:bg-quill/90"
           >
             {generating ? (

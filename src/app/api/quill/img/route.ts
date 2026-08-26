@@ -180,5 +180,41 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return new Response(`Proxy error: ${lastError ?? "unknown"}`, { status: 502 });
+  // Last resort: generate a colorful placeholder SVG so the browser ALWAYS
+  // gets a valid image. This prevents 502 errors from breaking the UI.
+  const placeholderSvg = generatePlaceholderSvg(fallbackPrompt || "Illustration");
+  const svgBuf = Buffer.from(placeholderSvg, "utf-8");
+  return new Response(new Uint8Array(svgBuf), {
+    headers: {
+      "Content-Type": "image/svg+xml",
+      "Content-Length": String(svgBuf.length),
+      "Cache-Control": "no-cache",
+    },
+  });
+}
+
+// Generate a colorful placeholder SVG with the prompt text
+function generatePlaceholderSvg(prompt: string): string {
+  // Truncate prompt for display
+  const displayPrompt = prompt.length > 60 ? prompt.slice(0, 57) + "..." : prompt;
+  // Pick a color based on the prompt hash
+  const hash = prompt.split("").reduce((a, b) => a + b.charCodeAt(0), 0);
+  const hue = hash % 360;
+  const bg = `hsl(${hue}, 70%, 85%)`;
+  const fg = `hsl(${hue}, 60%, 30%)`;
+  const accent = `hsl(${(hue + 180) % 360}, 70%, 50%)`;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+    <rect width="512" height="512" fill="${bg}"/>
+    <circle cx="256" cy="200" r="80" fill="${accent}" opacity="0.3"/>
+    <circle cx="256" cy="200" r="60" fill="${fg}" opacity="0.5"/>
+    <rect x="156" y="300" width="200" height="20" rx="10" fill="${fg}" opacity="0.3"/>
+    <rect x="176" y="340" width="160" height="14" rx="7" fill="${fg}" opacity="0.2"/>
+    <text x="256" y="420" font-family="sans-serif" font-size="16" fill="${fg}" text-anchor="middle" opacity="0.7">${escapeXml(displayPrompt)}</text>
+    <text x="256" y="470" font-family="sans-serif" font-size="12" fill="${fg}" text-anchor="middle" opacity="0.5">Quill — image loading...</text>
+  </svg>`;
+}
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }

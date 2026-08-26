@@ -41,6 +41,8 @@ export interface GenerateBookInput {
   research?: boolean;
   // Target page count — if set, the generator picks the best condensing mode
   targetPages?: number;
+  // If true, group lessons into sections (units) with divider pages
+  useSections?: boolean;
 }
 
 export interface GenerateBookProgress {
@@ -310,6 +312,21 @@ Add a small decorative image.
 Add a "tip" block: "Bring your homework to the next class!"
 
 Return JSON for a PageContent with type: "homework".`;
+}
+
+function buildSectionDividerPrompt(input: GenerateBookInput, sectionNumber: number, sectionTitle: string, lessonsInSection: string[]): string {
+  return `Generate a SECTION DIVIDER page for Section ${sectionNumber} of a ${input.level.fullLabel} ${input.subject.name} textbook.
+
+Section title: "${sectionTitle}"
+Lessons in this section: ${lessonsInSection.map((l, i) => `${i + 1}. ${l}`).join("\n")}
+
+The section divider should contain:
+- A big heading: "Section ${sectionNumber}: ${sectionTitle}"
+- A short introductory paragraph (2-3 sentences) about what this section covers
+- A bulleted list of the lessons in this section
+- A single large decorative image with alt text describing a themed illustration
+
+Return JSON for a PageContent with type: "section-divider".`;
 }
 
 function buildClosingPrompt(input: GenerateBookInput): string {
@@ -626,11 +643,34 @@ export async function* generateBook(
   yield { type: "page-done", pageIndex, pageType: "toc", pageTitle: "Table of Contents", page: toc };
   pageIndex++;
 
-  // 4. Lessons — each lesson has lesson + (exercise + homework | combined exercise/homework | nothing)
+  // 4. Lessons — grouped into sections if useSections is true
+  // Each section has ~3 lessons and gets its own divider page
+  const useSections = input.useSections ?? false;
+  const sectionSize = 3; // lessons per section
+  const sectionCount = useSections ? Math.ceil(topics.length / sectionSize) : 0;
+
   for (let i = 0; i < topics.length; i++) {
     if (opts.signal?.aborted) return;
     const topic = topics[i];
     const lessonNum = i + 1;
+
+    // Insert section divider at the start of each section
+    if (useSections && i % sectionSize === 0) {
+      const sectionNum = Math.floor(i / sectionSize) + 1;
+      const sectionStart = i;
+      const sectionEnd = Math.min(i + sectionSize, topics.length);
+      const lessonsInSection = topics.slice(sectionStart, sectionEnd);
+      // Build a section title from the first few lesson topics
+      const sectionTitle = lessonsInSection.length === 1
+        ? lessonsInSection[0]
+        : `${lessonsInSection[0]} & Related Topics`;
+      const dividerTitle = `Section ${sectionNum}: ${sectionTitle}`;
+      yield { type: "page-start", pageIndex, pageType: "section-divider", pageTitle: dividerTitle };
+      const divider = await genPage("section-divider", dividerTitle, buildSectionDividerPrompt(input, sectionNum, sectionTitle, lessonsInSection));
+      yield* flushLog();
+      yield { type: "page-done", pageIndex, pageType: "section-divider", pageTitle: dividerTitle, page: divider };
+      pageIndex++;
+    }
 
     // Research (optional) — passes authoritative content to the LLM
     let research = "";

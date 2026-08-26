@@ -178,6 +178,7 @@ export type Block =
 export type PageType =
   | "cover"
   | "toc"
+  | "section-divider"
   | "lesson"
   | "exercise"
   | "homework"

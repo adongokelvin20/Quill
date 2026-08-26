@@ -351,10 +351,21 @@ export function BlockView({ block, index }: { block: Block; index: number }) {
 export function PagePreview({ page }: { page: PageContent }) {
   const isCover = page.type === "cover";
   const isToc = page.type === "toc";
+  const isSectionDivider = page.type === "section-divider";
 
   if (isCover) {
     return (
       <div className="flex min-h-[420px] flex-col rounded-lg border-2 border-dashed border-amber-300 bg-gradient-to-br from-quill/10 via-amber-soft/60 to-amber-200/30 p-8">
+        {page.blocks.map((b, i) => (
+          <BlockView key={b.id ?? i} block={b} index={i} />
+        ))}
+      </div>
+    );
+  }
+
+  if (isSectionDivider) {
+    return (
+      <div className="flex min-h-[400px] flex-col rounded-lg border-2 border-quill bg-gradient-to-br from-quill/5 via-amber-soft/40 to-quill/10 p-8">
         {page.blocks.map((b, i) => (
           <BlockView key={b.id ?? i} block={b} index={i} />
         ))}
