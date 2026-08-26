@@ -1,0 +1,240 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Quill brand palette — warm teal + amber, evokes Ghanaian craft + scholarship */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-quill-sans);
+  --font-mono: var(--font-quill-mono);
+  --font-display: var(--font-quill-display);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Quill-specific tokens */
+  --color-quill: var(--quill);
+  --color-quill-foreground: var(--quill-foreground);
+  --color-quill-muted: var(--quill-muted);
+  --color-amber-soft: var(--amber-soft);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* Background + foreground */
+  --background: oklch(0.99 0.005 95);
+  --foreground: oklch(0.18 0.02 200);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.02 200);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.02 200);
+
+  /* Quill teal — primary brand colour */
+  --primary: oklch(0.45 0.09 195);
+  --primary-foreground: oklch(0.99 0.005 95);
+  --quill: oklch(0.45 0.09 195);
+  --quill-foreground: oklch(0.99 0.005 95);
+  --quill-muted: oklch(0.72 0.06 195);
+
+  /* Amber — accent */
+  --accent: oklch(0.78 0.16 75);
+  --accent-foreground: oklch(0.22 0.04 75);
+  --amber-soft: oklch(0.96 0.05 80);
+
+  --secondary: oklch(0.96 0.02 95);
+  --secondary-foreground: oklch(0.22 0.02 200);
+
+  --muted: oklch(0.96 0.005 95);
+  --muted-foreground: oklch(0.50 0.02 200);
+
+  --destructive: oklch(0.58 0.22 27);
+  --border: oklch(0.90 0.01 95);
+  --input: oklch(0.92 0.005 95);
+  --ring: oklch(0.55 0.07 195);
+
+  --chart-1: oklch(0.55 0.16 195);
+  --chart-2: oklch(0.78 0.16 75);
+  --chart-3: oklch(0.65 0.20 145);
+  --chart-4: oklch(0.62 0.18 30);
+  --chart-5: oklch(0.58 0.20 295);
+
+  --sidebar: oklch(0.985 0.005 95);
+  --sidebar-foreground: oklch(0.22 0.02 200);
+  --sidebar-primary: oklch(0.45 0.09 195);
+  --sidebar-primary-foreground: oklch(0.99 0.005 95);
+  --sidebar-accent: oklch(0.96 0.05 80);
+  --sidebar-accent-foreground: oklch(0.22 0.04 75);
+  --sidebar-border: oklch(0.90 0.01 95);
+  --sidebar-ring: oklch(0.55 0.07 195);
+}
+
+.dark {
+  --background: oklch(0.16 0.02 200);
+  --foreground: oklch(0.97 0.005 95);
+  --card: oklch(0.20 0.02 200);
+  --card-foreground: oklch(0.97 0.005 95);
+  --popover: oklch(0.20 0.02 200);
+  --popover-foreground: oklch(0.97 0.005 95);
+  --primary: oklch(0.70 0.10 195);
+  --primary-foreground: oklch(0.16 0.02 200);
+  --quill: oklch(0.70 0.10 195);
+  --quill-foreground: oklch(0.16 0.02 200);
+  --quill-muted: oklch(0.50 0.06 195);
+  --secondary: oklch(0.26 0.02 200);
+  --secondary-foreground: oklch(0.97 0.005 95);
+  --muted: oklch(0.26 0.02 200);
+  --muted-foreground: oklch(0.70 0.01 95);
+  --accent: oklch(0.78 0.16 75);
+  --accent-foreground: oklch(0.22 0.04 75);
+  --amber-soft: oklch(0.32 0.05 75);
+  --destructive: oklch(0.70 0.19 22);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.65 0.08 195);
+  --chart-1: oklch(0.70 0.10 195);
+  --chart-2: oklch(0.78 0.16 75);
+  --chart-3: oklch(0.65 0.20 145);
+  --chart-4: oklch(0.62 0.18 30);
+  --chart-5: oklch(0.58 0.20 295);
+  --sidebar: oklch(0.20 0.02 200);
+  --sidebar-foreground: oklch(0.97 0.005 95);
+  --sidebar-primary: oklch(0.70 0.10 195);
+  --sidebar-primary-foreground: oklch(0.16 0.02 200);
+  --sidebar-accent: oklch(0.26 0.02 200);
+  --sidebar-accent-foreground: oklch(0.97 0.005 95);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.65 0.08 195);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Quill utility classes */
+@layer utilities {
+  .font-display {
+    font-family: var(--font-quill-display), system-ui, sans-serif;
+  }
+  .font-kid {
+    font-family: var(--font-quill-display), "Comic Sans MS", "Quicksand", system-ui, sans-serif;
+  }
+  .text-quill {
+    color: var(--quill);
+  }
+  .bg-quill {
+    background-color: var(--quill);
+  }
+  .bg-quill-muted {
+    background-color: var(--quill-muted);
+  }
+  .bg-amber-soft {
+    background-color: var(--amber-soft);
+  }
+
+  /* Hand-drawn dotted border for KG / lower-basic blocks */
+  .border-dashed-kid {
+    border-style: dashed;
+    border-width: 3px;
+    border-color: var(--quill);
+  }
+
+  /* Decorative scalloped bottom border (like the reference worksheets) */
+  .scalloped-bottom {
+    --scallops: 12;
+    -webkit-mask: radial-gradient(circle at 50% 100%, transparent 6px, black 6px) 0 100% / calc(100% / var(--scallops)) 12px;
+  }
+
+  /* Custom scrollbar for editor panels */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: oklch(0.85 0.02 95);
+    border-radius: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.75 0.02 95);
+  }
+}
+
+/* Quill animations */
+@keyframes quill-pop {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.animate-quill-pop {
+  animation: quill-pop 0.25s ease-out;
+}
+
+@keyframes quill-fade-up {
+  0% { transform: translateY(8px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.animate-quill-fade-up {
+  animation: quill-fade-up 0.4s ease-out;
+}
+
+/* Prose styling for the in-app page preview */
+.prose-quill {
+  line-height: 1.65;
+}
+.prose-quill h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--quill);
+  margin-bottom: 0.5rem;
+}
+.prose-quill h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: oklch(0.35 0.06 195);
+  margin-top: 1rem;
+  margin-bottom: 0.4rem;
+}
+.prose-quill p {
+  margin-bottom: 0.6rem;
+}

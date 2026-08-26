@@ -1,0 +1,606 @@
+// Quill — Ghana Education Curriculum Data
+// Levels KG1 → JHS3, subjects, terms, and topics aligned with the GES Common Curriculum.
+
+export type LevelId =
+  | "KG1"
+  | "KG2"
+  | "B1"
+  | "B2"
+  | "B3"
+  | "B4"
+  | "B5"
+  | "B6"
+  | "JHS1"
+  | "JHS2"
+  | "JHS3";
+
+export interface LevelInfo {
+  id: LevelId;
+  label: string;
+  fullLabel: string;
+  ageRange: string;
+  description: string;
+  // Complexity used by content generator & illustration style
+  complexity: 1 | 2 | 3 | 4 | 5;
+  // Illustration style hint for image generation
+  illustrationStyle: string;
+  // Reading level / vocab difficulty
+  readingLevel: "pre-reader" | "early-reader" | "developing" | "fluent" | "advanced";
+  // Body font size for printed book (pt)
+  bodyFontSize: number;
+  // Heading font size for printed book (pt)
+  headingFontSize: number;
+  // Suggested page count per term book
+  suggestedPages: number;
+}
+
+export const LEVELS: LevelInfo[] = [
+  {
+    id: "KG1",
+    label: "KG 1",
+    fullLabel: "Kindergarten 1",
+    ageRange: "4 – 5 years",
+    description: "First steps in school. Pictures, songs, play-based learning and very simple vocabulary.",
+    complexity: 1,
+    illustrationStyle: "cute kawaii cartoon for toddlers, thick black outlines, bright primary colors, friendly faces, simple shapes, flat vector style",
+    readingLevel: "pre-reader",
+    bodyFontSize: 18,
+    headingFontSize: 28,
+    suggestedPages: 24,
+  },
+  {
+    id: "KG2",
+    label: "KG 2",
+    fullLabel: "Kindergarten 2",
+    ageRange: "5 – 6 years",
+    description: "Letters, sounds, numbers 1–20, tracing, colouring, picture matching, very short sentences.",
+    complexity: 1,
+    illustrationStyle: "cute cartoon for young kids, thick outlines, bright saturated colors, big friendly eyes, simple vector style, kawaii",
+    readingLevel: "pre-reader",
+    bodyFontSize: 18,
+    headingFontSize: 28,
+    suggestedPages: 28,
+  },
+  {
+    id: "B1",
+    label: "Basic 1",
+    fullLabel: "Basic 1 (Class 1)",
+    ageRange: "6 – 7 years",
+    description: "Phonics, simple CVC words, addition and subtraction within 20, short reading passages with pictures.",
+    complexity: 2,
+    illustrationStyle: "colorful cartoon for early readers, bold outlines, bright primary colors, friendly characters, simple flat vector illustration",
+    readingLevel: "early-reader",
+    bodyFontSize: 16,
+    headingFontSize: 26,
+    suggestedPages: 36,
+  },
+  {
+    id: "B2",
+    label: "Basic 2",
+    fullLabel: "Basic 2 (Class 2)",
+    ageRange: "7 – 8 years",
+    description: "Short sentences, simple grammar, two-digit maths, basic science of living things, communities.",
+    complexity: 2,
+    illustrationStyle: "colorful cartoon for early readers, bold outlines, bright colors, friendly characters, simple flat vector illustration",
+    readingLevel: "early-reader",
+    bodyFontSize: 15,
+    headingFontSize: 24,
+    suggestedPages: 40,
+  },
+  {
+    id: "B3",
+    label: "Basic 3",
+    fullLabel: "Basic 3 (Class 3)",
+    ageRange: "8 – 9 years",
+    description: "Short paragraphs, multiplication tables, fractions intro, environment and Ghanaian culture.",
+    complexity: 3,
+    illustrationStyle: "colorful children's book illustration, clean outlines, saturated colors, friendly cartoon characters",
+    readingLevel: "developing",
+    bodyFontSize: 14,
+    headingFontSize: 22,
+    suggestedPages: 48,
+  },
+  {
+    id: "B4",
+    label: "Basic 4",
+    fullLabel: "Basic 4 (Class 4)",
+    ageRange: "9 – 10 years",
+    description: "Longer reading, grammar rules, decimals, simple machines, regions of Ghana, map reading.",
+    complexity: 3,
+    illustrationStyle: "colorful educational illustration, clean modern cartoon style, friendly characters, clear diagrams",
+    readingLevel: "developing",
+    bodyFontSize: 13,
+    headingFontSize: 21,
+    suggestedPages: 56,
+  },
+  {
+    id: "B5",
+    label: "Basic 5",
+    fullLabel: "Basic 5 (Class 5)",
+    ageRange: "10 – 11 years",
+    description: "Comprehension, composition writing, percentages, the human body, West African history.",
+    complexity: 4,
+    illustrationStyle: "modern educational illustration, semi-realistic cartoon, clear diagrams, balanced palette, study-appropriate",
+    readingLevel: "fluent",
+    bodyFontSize: 12,
+    headingFontSize: 20,
+    suggestedPages: 64,
+  },
+  {
+    id: "B6",
+    label: "Basic 6",
+    fullLabel: "Basic 6 (Class 6)",
+    ageRange: "11 – 12 years",
+    description: "Advanced comprehension, ratio and proportion, energy, government, careers, exam prep.",
+    complexity: 4,
+    illustrationStyle: "modern educational illustration, semi-realistic cartoon, clear diagrams, balanced palette, study-appropriate",
+    readingLevel: "fluent",
+    bodyFontSize: 12,
+    headingFontSize: 20,
+    suggestedPages: 72,
+  },
+  {
+    id: "JHS1",
+    label: "JHS 1",
+    fullLabel: "Junior High School 1",
+    ageRange: "12 – 13 years",
+    description: "Algebra intro, essay writing, biology, Ghana's independence, digital literacy.",
+    complexity: 5,
+    illustrationStyle: "modern textbook illustration, realistic diagrams, balanced palette, charts, infographics, study-appropriate",
+    readingLevel: "advanced",
+    bodyFontSize: 11,
+    headingFontSize: 19,
+    suggestedPages: 84,
+  },
+  {
+    id: "JHS2",
+    label: "JHS 2",
+    fullLabel: "Junior High School 2",
+    ageRange: "13 – 14 years",
+    description: "Geometry, essay writing, chemistry basics, the 1992 Constitution, business studies.",
+    complexity: 5,
+    illustrationStyle: "modern textbook illustration, realistic diagrams, balanced palette, charts, infographics, study-appropriate",
+    readingLevel: "advanced",
+    bodyFontSize: 11,
+    headingFontSize: 19,
+    suggestedPages: 90,
+  },
+  {
+    id: "JHS3",
+    label: "JHS 3",
+    fullLabel: "Junior High School 3 (BECE)",
+    ageRange: "14 – 15 years",
+    description: "BECE preparation, advanced algebra, comprehension, physics intro, civic education, exam practice.",
+    complexity: 5,
+    illustrationStyle: "modern textbook illustration, realistic diagrams, balanced palette, charts, infographics, study-appropriate",
+    readingLevel: "advanced",
+    bodyFontSize: 11,
+    headingFontSize: 19,
+    suggestedPages: 96,
+  },
+];
+
+export function getLevel(id: LevelId): LevelInfo {
+  return LEVELS.find((l) => l.id === id) ?? LEVELS[0];
+}
+
+// ---------------------------------------------------------------------------
+// Subjects
+// ---------------------------------------------------------------------------
+
+export interface SubjectInfo {
+  id: string;
+  name: string;
+  // For KG / lower basic — does this subject make sense?
+  appliesTo: (level: LevelId) => boolean;
+  // Topic catalogue per term. Topics are organised by term (1,2,3) — arrays.
+  topics: {
+    1: string[];
+    2: string[];
+    3: string[];
+  };
+}
+
+const ALL: (level: LevelId) => boolean = () => true;
+const KG_ONLY: (level: LevelId) => boolean = (l) => l === "KG1" || l === "KG2";
+const LOWER: (level: LevelId) => boolean = (l) =>
+  l === "KG1" || l === "KG2" || l === "B1" || l === "B2" || l === "B3";
+const UPPER: (level: LevelId) => boolean = (l) => !LOWER(l);
+
+export const SUBJECTS: SubjectInfo[] = [
+  {
+    id: "english",
+    name: "English Language",
+    appliesTo: ALL,
+    topics: {
+      1: [
+        "Phonics: sounds of the alphabet",
+        "Greetings and self-introduction",
+        "My family — names and roles",
+        "Common classroom objects",
+        "Naming words (nouns): people, places, things",
+        "Action words (verbs)",
+        "Colours and shapes",
+        "Simple sentences (subject + verb)",
+        "Reading short picture stories",
+        "Spelling common sight words",
+      ],
+      2: [
+        "Describing words (adjectives)",
+        "Pronouns: I, you, he, she, it, we, they",
+        "Singular and plural nouns",
+        "Articles a, an, the",
+        "Asking questions (who, what, where)",
+        "Telling the time in words",
+        "Days of the week and months",
+        "Reading short passages",
+        "Writing simple sentences",
+        "Picture composition",
+      ],
+      3: [
+        "Parts of speech review",
+        "Present, past and future tense",
+        "Prepositions of place",
+        "Conjunctions: and, but, or",
+        "Punctuation: full stop, comma, question mark",
+        "Comprehension passages",
+        "Letter writing (informal)",
+        "Story writing with a beginning, middle and end",
+        "Dictionary skills",
+        "Common idioms and proverbs",
+      ],
+    },
+  },
+  {
+    id: "maths",
+    name: "Mathematics",
+    appliesTo: ALL,
+    topics: {
+      1: [
+        "Numbers 1 – 20: counting and recognition",
+        "Tracing and writing numbers",
+        "More than, less than, equal to",
+        "Addition within 10 using objects",
+        "Subtraction within 10 using objects",
+        "Shapes: circle, square, triangle, rectangle",
+        "Patterns and sequences",
+        "Tall, short, long, short",
+        "Heavy and light",
+        "Money: naming Ghanaian coins",
+      ],
+      2: [
+        "Numbers 1 – 100",
+        "Place value: tens and ones",
+        "Addition of two-digit numbers",
+        "Subtraction of two-digit numbers",
+        "Multiplication as repeated addition (2, 5, 10)",
+        "Fractions: halves and quarters",
+        "Time: reading the clock (hour, half-hour)",
+        "Measurement: length in centimetres",
+        "Money: buying and giving change",
+        "Pictographs and bar charts",
+      ],
+      3: [
+        "Whole numbers up to 10,000",
+        "Multiplication tables (2 – 12)",
+        "Division as sharing",
+        "Fractions: addition and subtraction (like denominators)",
+        "Decimals up to two places",
+        "Percentages: an introduction",
+        "Perimeter and area of rectangles",
+        "2-D and 3-D shapes",
+        "Mean, mode and median",
+        "Word problems: money, distance and time",
+      ],
+    },
+  },
+  {
+    id: "science",
+    name: "Science",
+    appliesTo: (l) => !KG_ONLY(l),
+    topics: {
+      1: [
+        "Living and non-living things",
+        "Parts of a plant",
+        "Animals around us",
+        "Our five senses",
+        "Healthy and unhealthy foods",
+        "Keeping our body clean",
+        "Sun, moon and stars",
+        "Water and how we use it",
+        "Air and wind",
+        "Sorting objects by material",
+      ],
+      2: [
+        "The human body: organs",
+        "Life cycle of a butterfly",
+        "Life cycle of a plant",
+        "Solid, liquid and gas",
+        "Sound and how it travels",
+        "Light and shadows",
+        "Magnets and what they attract",
+        "Simple machines: lever, pulley",
+        "Soil and what lives in it",
+        "Weather and seasons in Ghana",
+      ],
+      3: [
+        "Cells — the building blocks of life",
+        "The digestive system",
+        "Plants: photosynthesis",
+        "Forces and motion",
+        "Electricity and simple circuits",
+        "Properties of materials",
+        "The water cycle",
+        "Renewable and non-renewable energy",
+        "The solar system",
+        "Pollution and recycling",
+      ],
+    },
+  },
+  {
+    id: "owop",
+    name: "Our World Our People",
+    appliesTo: (l) => !KG_ONLY(l),
+    topics: {
+      1: [
+        "Myself and my family",
+        "My school community",
+        "My neighbourhood",
+        "People who help us",
+        "Ghana: our country",
+        "The Ghana flag and national symbols",
+        "Festivals in Ghana",
+        "Foods we eat in Ghana",
+        "Clothes we wear",
+        "Respect for elders",
+      ],
+      2: [
+        "The regions of Ghana",
+        "Capital cities of regions",
+        "Rivers and lakes of Ghana",
+        "Mountains and highlands",
+        "Transport in Ghana: past and present",
+        "Markets and trading",
+        "Cultures and languages of Ghana",
+        "Important Ghanaian leaders",
+        "Traditional rulers",
+        "Map reading basics",
+      ],
+      3: [
+        "Pre-colonial Ghana",
+        "The trans-Atlantic slave trade",
+        "The arrival of the British",
+        "The Big Six and the independence struggle",
+        "Independence: 6 March 1957",
+        "The First Republic",
+        "Military regimes 1966 – 1979",
+        "The Fourth Republic and the 1992 Constitution",
+        "Local government and district assemblies",
+        "Ghana in the ECOWAS and the AU",
+      ],
+    },
+  },
+  {
+    id: "rme",
+    name: "Religious & Moral Education",
+    appliesTo: (l) => !KG_ONLY(l),
+    topics: {
+      1: [
+        "Who is God?",
+        "God the creator",
+        "Thanking God for our lives",
+        "Loving one another",
+        "Honesty and truthfulness",
+        "Sharing with others",
+        "Respect for parents and teachers",
+        "Stories of Jesus",
+        "Stories of the Prophets",
+        "Traditional Ghanaian beliefs",
+      ],
+      2: [
+        "The Bible: the word of God",
+        "The Qur'an and the Hadith",
+        "Prayer and worship",
+        "The Ten Commandments",
+        "Good and bad behaviour",
+        "Helping the needy",
+        "Stories of the prophets",
+        "Festivals of the major religions",
+        "Moral lessons from folktales",
+        "Forgiveness",
+      ],
+      3: [
+        "Religion and society in Ghana",
+        "Freedom of worship in the Constitution",
+        "Religious tolerance and peace",
+        "Moral decision-making",
+        "Sexuality and moral responsibility",
+        "Stewardship of the environment",
+        "Work, honesty and integrity",
+        "Marriage and family life",
+        "Death and the afterlife — comparative views",
+        "Service to the nation",
+      ],
+    },
+  },
+  {
+    id: "computing",
+    name: "Computing",
+    appliesTo: UPPER,
+    topics: {
+      1: [
+        "Introduction to computers",
+        "Parts of a computer",
+        "Input and output devices",
+        "Using the mouse and keyboard",
+        "Files and folders",
+        "Introduction to word processing",
+        "Staying safe online",
+        "Computer ethics",
+        "Introduction to Scratch programming",
+        "Drawing with a computer",
+      ],
+      2: [
+        "Hardware and software",
+        "Operating systems",
+        "Word processing: formatting documents",
+        "Spreadsheets: cells, rows and columns",
+        "Internet and the World Wide Web",
+        "Search engines and reliable sources",
+        "Email and online communication",
+        "Cybersecurity basics",
+        "Introduction to algorithms",
+        "Scratch: loops and conditionals",
+      ],
+      3: [
+        "Computer networks",
+        "Cloud computing",
+        "Introduction to HTML",
+        "Introduction to Python",
+        "Data and databases",
+        "Digital citizenship and copyright",
+        "Artificial intelligence — an introduction",
+        "Cyberbullying and online safety",
+        "Careers in computing",
+        "Build a simple project in Scratch",
+      ],
+    },
+  },
+  {
+    id: "creative_arts",
+    name: "Creative Arts & Design",
+    appliesTo: (l) => !KG_ONLY(l),
+    topics: {
+      1: [
+        "Drawing with lines and shapes",
+        "Colour: primary and secondary",
+        "Paper folding (origami)",
+        "Singing Ghanaian folk songs",
+        "Clapping rhythms",
+        "Simple drama: role-play",
+        "Movement and dance",
+        "Modelling with clay",
+        "Collage making",
+        "Picture stories",
+      ],
+      2: [
+        "Drawing from observation",
+        "Patterns and motifs from Ghana",
+        "Kente and Adinkra symbols",
+        "Singing in parts",
+        "Playing the recorder",
+        "Storytelling through drama",
+        "Traditional Ghanaian dances",
+        "Crafting with recycled materials",
+        "Photography basics",
+        "Designing a poster",
+      ],
+      3: [
+        "Perspective drawing",
+        "Colour theory: warm and cool",
+        "Graphic design principles",
+        "Music composition",
+        "Script-writing for drama",
+        "Choreographing a dance",
+        "Sculpture and ceramics",
+        "Textile design: tie-dye and batik",
+        "Animation basics",
+        "Building a design portfolio",
+      ],
+    },
+  },
+  {
+    id: "french",
+    name: "French",
+    appliesTo: UPPER,
+    topics: {
+      1: [
+        "Bonjour! Greetings in French",
+        "The French alphabet",
+        "Numbers 1 – 20 in French",
+        "Colours in French",
+        "Days and months",
+        "Members of the family",
+        "Classroom objects",
+        "Simple introductions: Je m'appelle...",
+        "Telling the time",
+        "Weather expressions",
+      ],
+      2: [
+        "Regular -er verbs",
+        "Articles: le, la, les",
+        "Asking questions",
+        "Food and drink vocabulary",
+        "At the market",
+        "Directions in town",
+        "Sports and hobbies",
+        "Daily routines",
+        "Reading short French passages",
+        "Writing a short postcard",
+      ],
+      3: [
+        "Past tense (passé composé)",
+        "Future tense (futur proche)",
+        "Pronouns: le, la, les",
+        "Reading comprehension",
+        "Letter writing in French",
+        "Describing people and places",
+        "Francophone West Africa",
+        "Listening to French songs",
+        "Short dialogues and role-play",
+        "BECE-style French practice",
+      ],
+    },
+  },
+  {
+    id: "career_tech",
+    name: "Career Technology",
+    appliesTo: UPPER,
+    topics: {
+      1: [
+        "Introduction to career technology",
+        "The design process",
+        "Tools and their safe use",
+        "Sewing: basic stitches",
+        "Foods and nutrition: the food groups",
+        "Woodwork basics",
+        "Beadwork and jewellery",
+        "Home management",
+        "Agriculture in the home",
+        "Entrepreneurship",
+      ],
+      2: [
+        "Textile design and printing",
+        "Pattern drafting",
+        "Cooking Ghanaian dishes",
+        "Bakery and confectionery",
+        "Furniture making",
+        "Ceramics and pottery",
+        "Cosmetology",
+        "Hospitality services",
+        "Bookkeeping for small business",
+        "Marketing basics",
+      ],
+      3: [
+        "Fashion design — project",
+        "Catering for events",
+        "Furniture restoration",
+        "Industrial ceramics",
+        "Cosmetology — salon management",
+        "Hotel and tourism management",
+        "Agricultural enterprise",
+        "Business plan for a small venture",
+        "Workshop safety and quality control",
+        "Careers in career technology",
+      ],
+    },
+  },
+];
+
+export function subjectsForLevel(level: LevelId): SubjectInfo[] {
+  return SUBJECTS.filter((s) => s.appliesTo(level));
+}
+
+export function topicsForTerm(subject: SubjectInfo, term: 1 | 2 | 3): string[] {
+  return subject.topics[term];
+}

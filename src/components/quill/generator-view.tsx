@@ -1,0 +1,563 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { LEVELS, SUBJECTS, LevelId, subjectsForLevel } from "@/lib/curriculum";
+import { useQuillStore } from "@/lib/store";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  GraduationCap,
+  BookOpen,
+  Calendar,
+  ListChecks,
+  Wand2,
+  Loader2,
+  Globe,
+  Search,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+
+type Step = 1 | 2 | 3 | 4;
+
+interface GeneratedPage {
+  pageIndex: number;
+  pageType: string;
+  pageTitle?: string;
+  page?: { type: string; title?: string; blocks: unknown[] };
+}
+
+export function GeneratorView() {
+  const { openEditor, goLibrary } = useQuillStore();
+  const [step, setStep] = useState<Step>(1);
+
+  // Step 1
+  const [level, setLevel] = useState<LevelId>("B3");
+  // Step 2
+  const [subject, setSubject] = useState<string>("english");
+  // Step 3
+  const [term, setTerm] = useState<1 | 2 | 3>(1);
+  // Step 4
+  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [lessons, setLessons] = useState<number>(3);
+  const [research, setResearch] = useState<boolean>(true);
+
+  // Reset topics when subject/term/level changes
+  useEffect(() => {
+    setSelectedTopics([]);
+  }, [subject, term]);
+
+  const availableSubjects = useMemo(() => subjectsForLevel(level), [level]);
+  const currentSubject = useMemo(
+    () => SUBJECTS.find((s) => s.id === subject) ?? SUBJECTS[0],
+    [subject]
+  );
+  const availableTopics = useMemo(
+    () => currentSubject.topics[term] ?? [],
+    [currentSubject, term]
+  );
+
+  // Auto-select subject if it's not available for the level
+  useEffect(() => {
+    if (!availableSubjects.find((s) => s.id === subject)) {
+      setSubject(availableSubjects[0]?.id ?? "english");
+    }
+  }, [availableSubjects, subject]);
+
+  // Generation state
+  const [generating, setGenerating] = useState(false);
+  const [progress, setProgress] = useState<{ message: string; pageIndex?: number; totalPages?: number }>({
+    message: "",
+  });
+  const [generatedPages, setGeneratedPages] = useState<GeneratedPage[]>([]);
+  const [bookId, setBookId] = useState<string | null>(null);
+  const [bookMeta, setBookMeta] = useState<{ title: string; subtitle: string; description: string } | null>(null);
+
+  const toggleTopic = (topic: string) => {
+    setSelectedTopics((prev) =>
+      prev.includes(topic) ? prev.filter((t) => t !== topic) : [...prev, topic]
+    );
+  };
+
+  const canProceed = () => {
+    if (step === 1) return !!level;
+    if (step === 2) return !!subject;
+    if (step === 3) return !!term;
+    if (step === 4) return selectedTopics.length > 0;
+    return true;
+  };
+
+  const startGeneration = async () => {
+    setGenerating(true);
+    setProgress({ message: "Starting..." });
+    setGeneratedPages([]);
+    setBookId(null);
+    setBookMeta(null);
+
+    // Local bookId reference — bypasses stale React state in setTimeout
+    let localBookId: string | null = null;
+
+    try {
+      const res = await fetch("/api/quill/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          level,
+          subject,
+          term,
+          topics: selectedTopics,
+          lessons,
+          research,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.body) throw new Error("No response body");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        let event = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            event = line.slice(6).trim();
+          } else if (line.startsWith("data:") && event) {
+            const data = JSON.parse(line.slice(5).trim());
+            if (event === "book-created") {
+              localBookId = data.bookId as string;
+            }
+            handleSSE(event, data);
+            event = "";
+          }
+        }
+      }
+
+      // Done
+      setProgress({ message: "Book ready!" });
+      toast.success("Book generated!", {
+        description: "Opening the editor...",
+      });
+      // Use the local reference — guaranteed to have the latest value
+      const id = localBookId ?? bookId;
+      if (id) {
+        setTimeout(() => openEditor(id), 800);
+      } else {
+        // Fallback — go to library so the user can find the new book
+        setTimeout(() => goLibrary(), 800);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error("Generation failed", { description: message });
+      setProgress({ message: `Error: ${message}` });
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleSSE = (event: string, data: Record<string, unknown>) => {
+    if (event === "book-created") {
+      setBookId(data.bookId as string);
+      setProgress({ message: "Creating book..." });
+    } else if (event === "book-meta") {
+      setBookMeta({
+        title: data.title as string,
+        subtitle: data.subtitle as string,
+        description: data.description as string,
+      });
+      setProgress({ message: `Generating: ${data.title}` });
+    } else if (event === "page-start") {
+      setProgress({
+        message: `Generating page ${((data.pageIndex as number) ?? 0) + 1}: ${data.pageTitle ?? ""}`,
+        pageIndex: data.pageIndex as number,
+      });
+    } else if (event === "page-done") {
+      setGeneratedPages((prev) => [
+        ...prev,
+        {
+          pageIndex: data.pageIndex as number,
+          pageType: data.pageType as string,
+          pageTitle: data.pageTitle as string,
+          page: data.page as { type: string; title?: string; blocks: unknown[] },
+        },
+      ]);
+    } else if (event === "log") {
+      setProgress({ message: data.message as string });
+    } else if (event === "complete") {
+      setProgress({ message: "Complete!", totalPages: generatedPages.length + 1 });
+    } else if (event === "error") {
+      toast.error("Generation error", { description: data.message as string });
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      {/* Step indicator */}
+      <div className="mb-8 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {[
+            { num: 1, label: "Level", icon: <GraduationCap className="h-3.5 w-3.5" /> },
+            { num: 2, label: "Subject", icon: <BookOpen className="h-3.5 w-3.5" /> },
+            { num: 3, label: "Term", icon: <Calendar className="h-3.5 w-3.5" /> },
+            { num: 4, label: "Topics", icon: <ListChecks className="h-3.5 w-3.5" /> },
+          ].map((s, i) => (
+            <div key={s.num} className="flex items-center">
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                  step === s.num
+                    ? "bg-quill text-quill-foreground"
+                    : step > s.num
+                    ? "bg-quill/10 text-quill"
+                    : "bg-muted text-muted-foreground"
+                )}
+              >
+                {step > s.num ? <Check className="h-3.5 w-3.5" /> : s.icon}
+                <span className="hidden sm:inline">{s.label}</span>
+              </div>
+              {i < 3 && <div className="mx-1 h-px w-4 bg-border sm:w-8" />}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* STEP 1: LEVEL */}
+      {step === 1 && (
+        <div className="animate-quill-fade-up space-y-6">
+          <div>
+            <h2 className="font-display text-2xl font-bold text-foreground">Choose the class level</h2>
+            <p className="mt-1 text-muted-foreground">
+              The level determines vocabulary, sentence length, illustration style, and font size in the exported book.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {LEVELS.map((l) => (
+              <button
+                key={l.id}
+                onClick={() => setLevel(l.id)}
+                className={cn(
+                  "group flex flex-col items-start gap-1 rounded-xl border-2 p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  level === l.id
+                    ? "border-quill bg-quill/5 ring-2 ring-quill/20"
+                    : "border-border bg-card hover:border-quill/40"
+                )}
+              >
+                <div className="flex w-full items-center justify-between">
+                  <span className="font-display text-xl font-bold text-quill">{l.label}</span>
+                  {level === l.id && (
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-quill text-quill-foreground">
+                      <Check className="h-3 w-3" strokeWidth={3} />
+                    </span>
+                  )}
+                </div>
+                <span className="text-sm font-medium text-foreground">{l.fullLabel}</span>
+                <span className="text-xs text-muted-foreground">{l.ageRange}</span>
+                <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{l.description}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2: SUBJECT */}
+      {step === 2 && (
+        <div className="animate-quill-fade-up space-y-6">
+          <div>
+            <h2 className="font-display text-2xl font-bold text-foreground">Choose a subject</h2>
+            <p className="mt-1 text-muted-foreground">
+              Subjects available for {LEVELS.find((l) => l.id === level)?.fullLabel}.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {availableSubjects.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setSubject(s.id)}
+                className={cn(
+                  "group flex items-center justify-between rounded-xl border-2 p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  subject === s.id
+                    ? "border-quill bg-quill/5 ring-2 ring-quill/20"
+                    : "border-border bg-card hover:border-quill/40"
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-12 w-12 items-center justify-center rounded-lg bg-quill/10 font-display text-xl font-bold text-quill">
+                    {s.name[0]}
+                  </span>
+                  <div>
+                    <div className="font-semibold text-foreground">{s.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {s.topics[1].length + s.topics[2].length + s.topics[3].length} topics across 3 terms
+                    </div>
+                  </div>
+                </div>
+                {subject === s.id && (
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-quill text-quill-foreground">
+                    <Check className="h-4 w-4" strokeWidth={3} />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3: TERM */}
+      {step === 3 && (
+        <div className="animate-quill-fade-up space-y-6">
+          <div>
+            <h2 className="font-display text-2xl font-bold text-foreground">Choose the term</h2>
+            <p className="mt-1 text-muted-foreground">
+              Each term has its own set of curriculum topics. The book will cover only the selected term.
+            </p>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {([1, 2, 3] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTerm(t)}
+                className={cn(
+                  "group flex flex-col items-start gap-2 rounded-xl border-2 p-6 text-left transition-all hover:-translate-y-0.5 hover:shadow-md",
+                  term === t
+                    ? "border-quill bg-quill/5 ring-2 ring-quill/20"
+                    : "border-border bg-card hover:border-quill/40"
+                )}
+              >
+                <div className="flex w-full items-center justify-between">
+                  <span className="font-display text-4xl font-bold text-quill">{t}</span>
+                  {term === t && (
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-quill text-quill-foreground">
+                      <Check className="h-4 w-4" strokeWidth={3} />
+                    </span>
+                  )}
+                </div>
+                <span className="font-medium text-foreground">Term {t}</span>
+                <span className="text-xs text-muted-foreground">
+                  {currentSubject.topics[t].length} topics available
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* STEP 4: TOPICS */}
+      {step === 4 && (
+        <div className="animate-quill-fade-up space-y-6">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h2 className="font-display text-2xl font-bold text-foreground">Pick the topics</h2>
+              <p className="mt-1 text-muted-foreground">
+                Selected: {selectedTopics.length} of {availableTopics.length}. Each topic becomes one lesson with
+                exercises and homework.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setSelectedTopics(availableTopics.slice())}>
+                Select all
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setSelectedTopics([])}>
+                Clear
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-2">
+            {availableTopics.map((topic, i) => {
+              const checked = selectedTopics.includes(topic);
+              return (
+                <label
+                  key={topic}
+                  htmlFor={`topic-${i}`}
+                  className={cn(
+                    "group flex cursor-pointer items-start gap-3 rounded-lg border-2 p-3 transition-all hover:border-quill/40",
+                    checked ? "border-quill bg-quill/5" : "border-border bg-card"
+                  )}
+                >
+                  <Checkbox
+                    id={`topic-${i}`}
+                    checked={checked}
+                    onCheckedChange={() => toggleTopic(topic)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1">
+                    <span className="text-sm font-medium text-foreground">{topic}</span>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                    Lesson {i + 1}
+                  </Badge>
+                </label>
+              );
+            })}
+          </div>
+
+          {/* Lessons count + research toggle */}
+          <Card className="border-quill/20 bg-quill/5">
+            <CardContent className="space-y-4 p-5">
+              <div>
+                <Label className="mb-2 block text-sm font-medium">
+                  Number of lessons to generate: <span className="font-bold text-quill">{lessons}</span>
+                </Label>
+                <input
+                  type="range"
+                  min={1}
+                  max={Math.min(8, selectedTopics.length || availableTopics.length)}
+                  value={lessons}
+                  onChange={(e) => setLessons(parseInt(e.target.value))}
+                  className="w-full accent-quill"
+                />
+                <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+                  <span>1 lesson (3 pages)</span>
+                  <span>{Math.min(8, selectedTopics.length || availableTopics.length)} lessons</span>
+                </div>
+              </div>
+
+              <div className="flex items-start justify-between gap-3 border-t border-quill/10 pt-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="research-toggle" className="flex items-center gap-1.5 text-sm font-medium">
+                    <Globe className="h-4 w-4 text-quill" />
+                    Research the web first
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Quill searches & scrapes authoritative sources to ground each lesson in real content. Slower but higher quality.
+                  </p>
+                </div>
+                <Switch id="research-toggle" checked={research} onCheckedChange={setResearch} />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Summary */}
+          <Card className="bg-amber-soft/40 border-amber-300/60">
+            <CardContent className="p-5">
+              <h3 className="mb-2 font-display font-semibold text-foreground">Summary</h3>
+              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Level:</span>
+                  <span className="font-medium">{LEVELS.find((l) => l.id === level)?.fullLabel}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Subject:</span>
+                  <span className="font-medium">{currentSubject.name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Term:</span>
+                  <span className="font-medium">Term {term}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Topics:</span>
+                  <span className="font-medium">{selectedTopics.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Lessons:</span>
+                  <span className="font-medium">{lessons}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Web research:</span>
+                  <span className="font-medium">{research ? "On" : "Off"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Estimated pages:</span>
+                  <span className="font-medium">{2 + lessons * 3 + 2} pages</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Generation progress */}
+          {generating && (
+            <Card className="border-quill/30">
+              <CardContent className="space-y-4 p-5">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="h-5 w-5 animate-spin text-quill" />
+                  <div className="flex-1">
+                    <div className="font-medium text-foreground">{progress.message || "Working..."}</div>
+                    {bookMeta && (
+                      <div className="text-xs text-muted-foreground">
+                        {bookMeta.title} — {bookMeta.subtitle}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {generatedPages.length > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{generatedPages.length} pages generated</span>
+                      {progress.totalPages && <span>{progress.totalPages} expected</span>}
+                    </div>
+                    <div className="grid gap-1.5 sm:grid-cols-2">
+                      {generatedPages.map((p) => (
+                        <div
+                          key={p.pageIndex}
+                          className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1.5 text-xs"
+                        >
+                          <Check className="h-3 w-3 text-emerald-600" />
+                          <span className="flex-1 truncate text-muted-foreground">
+                            Page {p.pageIndex + 1}: {p.pageTitle}
+                          </span>
+                          <Badge variant="outline" className="text-[9px]">
+                            {p.pageType}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Navigation */}
+      <div className="mt-8 flex items-center justify-between border-t border-border/60 pt-6">
+        <Button
+          variant="ghost"
+          onClick={() => (step > 1 ? setStep((step - 1) as Step) : useQuillStore.getState().goHome())}
+          disabled={generating}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          {step > 1 ? "Back" : "Home"}
+        </Button>
+
+        {step < 4 ? (
+          <Button onClick={() => setStep((step + 1) as Step)} disabled={!canProceed()} className="bg-quill text-quill-foreground hover:bg-quill/90">
+            Next
+            <ArrowRight className="ml-2 h-4 w-4" />
+          </Button>
+        ) : (
+          <Button
+            onClick={startGeneration}
+            disabled={generating || selectedTopics.length === 0}
+            className="bg-quill text-quill-foreground hover:bg-quill/90"
+          >
+            {generating ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Wand2 className="mr-2 h-4 w-4" />
+                Generate book
+              </>
+            )}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}

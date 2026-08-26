@@ -1,0 +1,111 @@
+// Quill — Bringing intelligent education to life.
+// Prisma schema (PostgreSQL-compatible; runs on SQLite in dev).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Books & pages
+// ---------------------------------------------------------------------------
+
+model Book {
+  id           String   @id @default(cuid())
+  title        String
+  subtitle     String?
+  description  String?
+
+  // Ghana education level: KG1, KG2, B1..B6, JHS1..JHS3
+  level        String
+  // Subject: English, Mathematics, Science, Our World Our People, RME, Computing, Creative Arts, French, Ghanaian Language
+  subject      String
+  // Term: 1, 2, 3
+  term         Int
+  // Language: english / twi / ga / ewe / dagbani (default english)
+  language     String   @default("english")
+
+  coverColor   String   @default("#0f766e")
+  accentColor  String   @default("#f59e0b")
+
+  // Status: draft / generating / ready / error
+  status       String   @default("draft")
+  // JSON: curriculum topics chosen for this book
+  topics       String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  pages        Page[]
+  exports      BookExport[]
+}
+
+model Page {
+  id           String   @id @default(cuid())
+  bookId       String
+  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pageNumber   Int
+  // Page type: cover, toc, lesson, exercise, homework, glossary, activity, closing
+  type         String   @default("lesson")
+  title        String?
+  // Rich content stored as JSON: array of blocks (text, image, activity, table...)
+  content      String
+  // Optional teaching notes
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([bookId, pageNumber])
+}
+
+model BookExport {
+  id           String   @id @default(cuid())
+  bookId       String
+  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  // docx, pdf, json
+  format       String
+  // Stored file path under /download
+  filePath     String
+  fileSize     Int      @default(0)
+  createdAt    DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Asset library (image search / generation results, cached)
+// ---------------------------------------------------------------------------
+
+model Asset {
+  id           String   @id @default(cuid())
+  // Type: generated | searched | uploaded
+  source       String
+  // Original prompt or query
+  prompt       String
+  // Direct URL (data URL or remote URL)
+  url          String
+  // Width / height
+  width        Int?
+  height       Int?
+  // Optional alt text
+  alt          String?
+  // Optional tags
+  tags         String?
+  createdAt    DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Scraped web content cache
+// ---------------------------------------------------------------------------
+
+model ScrapedPage {
+  id           String   @id @default(cuid())
+  url          String   @unique
+  title        String?
+  // Plain-text content, truncated to ~50k chars
+  content      String
+  // Fetched at
+  fetchedAt    DateTime @default(now())
+}
