@@ -39,3 +39,63 @@ Stage Summary:
 - ✅ No browser console errors.
 - ✅ End-to-end flow verified: home → generator → library → editor → export.
 - Final files: ~10 library files, 8 API routes, 4 view components, ~2500 lines of TypeScript/TSX.
+
+---
+Task ID: 2
+Agent: Super Z (main)
+Task: Enforce production next steps (PostgreSQL-ready schema, NextAuth authentication with per-user libraries) and add page-count condensing feature.
+
+Work Log:
+- Installed `bcryptjs` for password hashing.
+- Updated `prisma/schema.prisma` with `User`, `Account`, `Session`, `VerificationToken` models (NextAuth v4 compatible). Added nullable `userId` field on `Book` so existing anonymous books still work after migration. Schema works on both SQLite (dev) and PostgreSQL (Vercel production) — no `@db.Text` annotations needed (Prisma maps `String` to `TEXT` in Postgres by default).
+- Created `src/lib/auth.ts` with NextAuth config: Credentials provider (email + password), JWT session strategy (serverless-friendly, 30-day expiry), `getCurrentUserId()` helper for API routes.
+- Created `src/app/api/auth/[...nextauth]/route.ts` — NextAuth route handler mounted at `/api/auth/*`.
+- Created `src/app/api/auth/signup/route.ts` — signup endpoint with email validation, password length check (min 6 chars), bcrypt hashing (12 rounds), duplicate-email check, auto-returns user without session (client calls `signIn()` after).
+- Created `src/components/quill/session-provider.tsx` — wraps the app in NextAuth's `SessionProvider`.
+- Created `src/components/quill/auth-button.tsx` — dialog-based login/signup UI with tabs. Shows user avatar + name when signed in, "Sign in" button when not. Uses `signIn("credentials", { redirect: false })` for client-side error handling. Signup auto-signs-in after account creation.
+- Updated `src/app/layout.tsx` to wrap children in `QuillSessionProvider`.
+- Updated `src/components/quill/header.tsx` to include `AuthButton` in the top-right.
+- Updated all 6 API routes to enforce ownership:
+  - `GET /api/quill/books` — filters by `userId` (signed-in user's books, or anonymous books if not signed in).
+  - `POST /api/quill/books` — sets `userId` on creation.
+  - `GET/PATCH/DELETE /api/quill/books/[id]` — verifies `book.userId === currentUserId` before any operation.
+  - `POST/PATCH/DELETE /api/quill/pages` — verifies parent book ownership.
+  - `POST /api/quill/export` — verifies ownership before exporting.
+  - `POST /api/quill/generate` — sets `userId` on the created book.
+- Added page-count condensing logic to `src/lib/generator.ts`:
+  - New `planCondensing(targetPages, topics)` function picks the best mode: `full` (3 pages/lesson: lesson + exercise + homework), `condensed` (2 pages/lesson: lesson + combined practice & homework), `compact` (1 page/lesson: lesson with embedded exercise). Truncates topics if target is too small.
+  - Updated `buildSystemPrompt()` to include mode-specific instructions.
+  - Updated `buildLessonPrompt()` to add embedded exercise in compact mode.
+  - Updated `buildExercisePrompt()` to generate combined practice & homework in condensed mode.
+  - Updated `generateBook()` to skip exercise/homework pages in compact mode, skip homework in condensed mode.
+  - Added `targetPages` field to `GenerateBookInput` and `Book` model.
+- Updated `src/app/api/quill/generate/route.ts` to accept `targetPages` parameter and store it on the book.
+- Updated `src/components/quill/generator-view.tsx`:
+  - Added "Limit total pages" toggle with target page count slider (6–100).
+  - Live "Generation plan" preview showing mode (Full/Condensed/Compact), lessons count, fixed pages, total pages.
+  - Updated summary card with mode + page limit info.
+  - Generate button shows the total page count.
+- Created deployment files:
+  - `.env.example` — all required env vars with comments.
+  - `vercel.json` — function maxDuration config (generate=300s, export=180s, img=60s), build command with `prisma generate`.
+  - `DEPLOYMENT.md` — step-by-step Vercel + Postgres deployment guide (6 steps), env var reference, serverless constraint notes, troubleshooting.
+- Updated `.env` with `NEXTAUTH_SECRET` and `NEXTAUTH_URL` for local dev.
+- Tested end-to-end via Agent Browser:
+  - Signed up as "Kwame Teacher" (kwame@school.edu.gh) — account created, auto-signed-in.
+  - Created KG1 English Term 1 book with 4 topics, page limit = 10.
+  - Plan correctly showed "Compact mode" (4 lessons × 1 page + 4 fixed = 8 pages).
+  - Generation completed, editor opened with exactly 8 pages (cover, TOC, 4 lessons, glossary, closing).
+  - Lesson pages have embedded "Let's Practice" section with fill-blanks (compact mode working).
+  - Images loaded successfully.
+  - Library shows only the signed-in user's book (old anonymous books hidden — auth isolation works).
+  - ESLint passes with no errors.
+
+Stage Summary:
+- ✅ NextAuth v4 with Credentials provider fully working (signup, login, logout, JWT sessions).
+- ✅ Per-user book isolation — each user only sees their own books.
+- ✅ Page-count condensing: full (3pp/lesson) → condensed (2pp/lesson) → compact (1pp/lesson) with auto-truncation.
+- ✅ Live plan preview in the wizard UI.
+- ✅ PostgreSQL-ready schema (switch one line to deploy on Vercel Postgres).
+- ✅ Deployment guide, .env.example, and vercel.json created.
+- ✅ All API routes gated behind ownership checks.
+- ✅ ESLint clean, no browser errors.

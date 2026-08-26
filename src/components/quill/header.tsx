@@ -3,6 +3,7 @@
 import { useQuillStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Library, Sparkles, Home, Feather } from "lucide-react";
+import { AuthButton } from "@/components/quill/auth-button";
 
 export function QuillHeader() {
   const { view, goHome, goLibrary, goGenerator } = useQuillStore();
@@ -30,23 +31,27 @@ export function QuillHeader() {
           </span>
         </button>
 
-        <nav className="flex items-center gap-1">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={item.onClick}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                item.active
-                  ? "bg-quill/10 text-quill"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-            >
-              {item.icon}
-              <span className="hidden sm:inline">{item.label}</span>
-            </button>
-          ))}
-        </nav>
+        <div className="flex items-center gap-2">
+          <nav className="flex items-center gap-1">
+            {navItems.map((item) => (
+              <button
+                key={item.id}
+                onClick={item.onClick}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                  item.active
+                    ? "bg-quill/10 text-quill"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                {item.icon}
+                <span className="hidden sm:inline">{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="hidden h-6 w-px bg-border sm:block" />
+          <AuthButton />
+        </div>
       </div>
     </header>
   );

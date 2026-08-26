@@ -4,8 +4,9 @@
 
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { generateBook, GenerateBookInput } from "@/lib/generator";
+import { generateBook, GenerateBookInput, planCondensing } from "@/lib/generator";
 import { LEVELS, SUBJECTS, getLevel } from "@/lib/curriculum";
+import { getCurrentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // 5 minutes — Vercel Pro allows up to 300s
@@ -20,6 +21,7 @@ export async function POST(req: NextRequest) {
     lessons?: number;
     language?: string;
     research?: boolean;
+    targetPages?: number;
   };
 
   try {
@@ -52,6 +54,12 @@ export async function POST(req: NextRequest) {
     ? body.topics
     : subject.topics[term].slice(0, 3);
 
+  // Determine the condensing plan up-front so we can show it to the user and
+  // store it on the book record.
+  const plan = body.targetPages
+    ? planCondensing(body.targetPages, topics)
+    : null;
+
   const input: GenerateBookInput = {
     level: levelInfo,
     subject,
@@ -59,7 +67,11 @@ export async function POST(req: NextRequest) {
     topics,
     lessons: body.lessons ?? Math.min(4, topics.length),
     language: body.language ?? "english",
+    targetPages: body.targetPages,
   };
+
+  // Get the current user (or null for anonymous)
+  const userId = await getCurrentUserId(req);
 
   // Create the book record up-front so the client can reference it
   const book = await db.book.create({
@@ -73,6 +85,8 @@ export async function POST(req: NextRequest) {
       language: input.language ?? "english",
       status: "generating",
       topics: JSON.stringify(topics),
+      targetPages: body.targetPages ?? null,
+      userId,
     },
   });
 

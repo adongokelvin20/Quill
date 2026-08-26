@@ -1,13 +1,77 @@
 // Quill — Bringing intelligent education to life.
-// Prisma schema (PostgreSQL-compatible; runs on SQLite in dev).
+// Prisma schema. Works on SQLite (dev) and PostgreSQL (Vercel production).
+//
+// To deploy on Vercel with Postgres:
+//   1. Set DATABASE_URL to your Vercel Postgres connection string
+//   2. Change provider below from "sqlite" to "postgresql"
+//   3. Run: bun run db:push   (or prisma migrate dev --name init)
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
+  // Switch this to "postgresql" when deploying to Vercel.
   provider = "sqlite"
   url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users & authentication (NextAuth v4)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  // bcrypt-hashed password (for Credentials provider)
+  passwordHash String?
+  image        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  books        Book[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
 
 // ---------------------------------------------------------------------------
@@ -22,7 +86,7 @@ model Book {
 
   // Ghana education level: KG1, KG2, B1..B6, JHS1..JHS3
   level        String
-  // Subject: English, Mathematics, Science, Our World Our People, RME, Computing, Creative Arts, French, Ghanaian Language
+  // Subject: english, maths, science, owop, rme, computing, creative_arts, french, career_tech
   subject      String
   // Term: 1, 2, 3
   term         Int
@@ -36,12 +100,22 @@ model Book {
   status       String   @default("draft")
   // JSON: curriculum topics chosen for this book
   topics       String?
+  // Total pages target (for condensing logic)
+  targetPages  Int?
+
+  // Owner — nullable so existing anonymous books still work after migration.
+  // API routes filter by userId; null userId books are visible to everyone
+  // (useful for shared / public-domain books).
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   pages        Page[]
   exports      BookExport[]
+
+  @@index([userId])
 }
 
 model Page {

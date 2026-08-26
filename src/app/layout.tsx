@@ -3,6 +3,7 @@ import { Fredoka, Nunito } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
+import { QuillSessionProvider } from "@/components/quill/session-provider";
 
 const fredoka = Fredoka({
   variable: "--font-quill-display",
@@ -56,9 +57,11 @@ export default function RootLayout({
         className={`${fredoka.variable} ${nunito.variable} antialiased bg-background text-foreground`}
         style={{ fontFamily: "var(--font-quill-sans), system-ui, sans-serif" }}
       >
-        {children}
-        <Toaster />
-        <SonnerToaster position="top-right" richColors />
+        <QuillSessionProvider>
+          {children}
+          <Toaster />
+          <SonnerToaster position="top-right" richColors />
+        </QuillSessionProvider>
       </body>
     </html>
   );

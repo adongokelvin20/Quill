@@ -2,6 +2,17 @@
 // Uses Z.ai LLM (chat completions) with curriculum-aware prompts to produce
 // rich, level-appropriate book pages as JSON block trees.
 //
+// Page-count condensing:
+//   The user can specify a target page count. The generator then picks the best
+//   "mode" to fit the selected topics into that many pages:
+//
+//     "full"      — lesson + exercise + homework (3 pages per topic)
+//     "condensed" — lesson + combined exercise/homework (2 pages per topic)
+//     "compact"   — lesson with embedded exercise (1 page per topic)
+//
+//   Fixed pages: cover, TOC, glossary, closing = 4 pages.
+//   Available pages for lessons = targetPages - 4.
+//
 // Streaming: each page is generated and sent to the client as it completes,
 // which keeps the perceived latency low and avoids Vercel function timeouts.
 
@@ -9,6 +20,8 @@ import ZAI from "z-ai-web-dev-sdk";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
 import { researchTopic } from "@/lib/research";
+
+export type GenerationMode = "full" | "condensed" | "compact";
 
 export interface GenerateBookInput {
   level: LevelInfo;
@@ -21,6 +34,8 @@ export interface GenerateBookInput {
   language?: string;
   // Research toggle — fetch authoritative reference text before generating
   research?: boolean;
+  // Target page count — if set, the generator picks the best condensing mode
+  targetPages?: number;
 }
 
 export interface GenerateBookProgress {
@@ -34,13 +49,89 @@ export interface GenerateBookProgress {
 }
 
 // ---------------------------------------------------------------------------
+// Condensing logic — given target pages and topic count, pick the best mode
+// ---------------------------------------------------------------------------
+
+const FIXED_PAGES = 4; // cover + TOC + glossary + closing
+
+export interface CondensingPlan {
+  mode: GenerationMode;
+  lessonsToGenerate: number;
+  topicsToUse: string[];
+  pagesPerLesson: number;
+  estimatedTotalPages: number;
+  // Human-readable description for the UI
+  description: string;
+}
+
+export function planCondensing(targetPages: number, topics: string[]): CondensingPlan {
+  const availableForLessons = Math.max(0, targetPages - FIXED_PAGES);
+  const topicCount = topics.length;
+
+  // Try full mode first (3 pages per lesson)
+  if (availableForLessons >= 3 * topicCount) {
+    return {
+      mode: "full",
+      lessonsToGenerate: topicCount,
+      topicsToUse: topics,
+      pagesPerLesson: 3,
+      estimatedTotalPages: FIXED_PAGES + 3 * topicCount,
+      description: `Full mode: ${topicCount} lessons × 3 pages (lesson + exercise + homework) + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + 3 * topicCount} pages`,
+    };
+  }
+
+  // Try condensed mode (2 pages per lesson)
+  if (availableForLessons >= 2 * topicCount) {
+    return {
+      mode: "condensed",
+      lessonsToGenerate: topicCount,
+      topicsToUse: topics,
+      pagesPerLesson: 2,
+      estimatedTotalPages: FIXED_PAGES + 2 * topicCount,
+      description: `Condensed mode: ${topicCount} lessons × 2 pages (lesson + combined exercise/homework) + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + 2 * topicCount} pages`,
+    };
+  }
+
+  // Try compact mode (1 page per lesson) — fits all topics
+  if (availableForLessons >= topicCount) {
+    return {
+      mode: "compact",
+      lessonsToGenerate: topicCount,
+      topicsToUse: topics,
+      pagesPerLesson: 1,
+      estimatedTotalPages: FIXED_PAGES + topicCount,
+      description: `Compact mode: ${topicCount} lessons × 1 page (lesson with embedded exercise) + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + topicCount} pages`,
+    };
+  }
+
+  // Not enough pages for all topics — truncate to fit
+  const fittingTopics = Math.max(1, availableForLessons);
+  const truncated = topics.slice(0, fittingTopics);
+  return {
+    mode: "compact",
+    lessonsToGenerate: truncated.length,
+    topicsToUse: truncated,
+    pagesPerLesson: 1,
+    estimatedTotalPages: FIXED_PAGES + truncated.length,
+    description: `Compact mode (truncated): only ${truncated.length} of ${topicCount} topics fit in ${targetPages} pages. Each lesson = 1 page (lesson with embedded exercise). + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + truncated.length} pages`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // System prompt builder — tuned per class level
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo): string {
+function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo, mode: GenerationMode): string {
   const isKG = level.complexity <= 1;
   const isLower = level.complexity <= 2;
   const isUpper = level.complexity >= 4;
+
+  const modeNote =
+    mode === "full"
+      ? "MODE: Full. Each lesson spans 3 pages: lesson page, exercise page, homework page. Generate rich, separate content for each."
+      : mode === "condensed"
+      ? "MODE: Condensed. Each lesson spans 2 pages: lesson page, then a combined exercise+homework page (call it 'Practice & Homework'). Keep content tight but complete."
+      : "MODE: Compact. Each lesson is a single page that includes the lesson content AND a short embedded exercise (3-4 questions) at the bottom. Be concise but cover the key points.";
 
   return `You are Quill, an expert Ghana Education Service (GES) curriculum author. You write teaching and learning materials for Ghanaian basic schools.
 
@@ -77,6 +168,8 @@ Block is a discriminated union — each block has a "type" field plus its data. 
 - homework          { type: "homework", title: string, instructions: string, items: string[] }
 
 For every image you want on the page, output an "image" block with url: "PLACEHOLDER" and a clear "alt" describing what the illustration should show. The alt text will be used to generate a kid-friendly illustration. For KG/lower-basic, prefer one big image per page. For upper levels, illustrations should be diagrams, charts, or labelled figures.
+
+${modeNote}
 
 AUDIENCE & STYLE — match the level precisely:
 - Level: ${level.fullLabel} (ages ${level.ageRange}, complexity ${level.complexity}/5)
@@ -118,8 +211,11 @@ The cover should contain:
 Return JSON for a PageContent with type: "cover".`;
 }
 
-function buildTocPrompt(input: GenerateBookInput): string {
-  return `Generate a TABLE OF CONTENTS page for the same book. List the ${input.topics.length} lessons, each on a numbered line: "Lesson N — Topic Title ........... page N*2".
+function buildTocPrompt(input: GenerateBookInput, plan: CondensingPlan): string {
+  return `Generate a TABLE OF CONTENTS page for the same book. List the ${plan.lessonsToGenerate} lessons, each on a numbered line: "Lesson N — Topic Title ........... page N".
+
+Use the following topics (in order):
+${plan.topicsToUse.map((t, i) => `${i + 1}. ${t}`).join("\n")}
 
 Return JSON for a PageContent with type: "toc".`;
 }
@@ -128,12 +224,18 @@ function buildLessonPrompt(
   input: GenerateBookInput,
   topic: string,
   lessonNumber: number,
-  research: string
+  research: string,
+  mode: GenerationMode
 ): string {
   const r = research ? `\n\nREFERENCE MATERIAL (use this as authoritative source):\n${research}\n` : "";
+  const compactNote =
+    mode === "compact"
+      ? "\n\nIMPORTANT: Since this is COMPACT mode (single-page lesson), include a short embedded exercise at the bottom of the same page — use a 'fill-blanks' block with 3 sentences OR a 'multiple-choice' block with 3 questions. Do NOT generate separate exercise or homework pages."
+      : "";
+
   return `Generate a LESSON page for Lesson ${lessonNumber} of ${input.level.fullLabel} ${input.subject.name}, Term ${input.term}.
 
-Topic: ${topic}${r}
+Topic: ${topic}${r}${compactNote}
 
 Structure:
 1. Heading: "Lesson ${lessonNumber}: ${topic}"
@@ -150,8 +252,24 @@ Keep the content rich but appropriate for the reading level. Return JSON for a P
 function buildExercisePrompt(
   input: GenerateBookInput,
   topic: string,
-  lessonNumber: number
+  lessonNumber: number,
+  mode: GenerationMode
 ): string {
+  if (mode === "condensed") {
+    return `Generate a COMBINED EXERCISE + HOMEWORK page for Lesson ${lessonNumber} (${topic}) of ${input.level.fullLabel} ${input.subject.name}.
+
+This single page serves as both the in-class exercise AND the take-home homework. Structure it as:
+1. Heading: "Practice & Homework — Lesson ${lessonNumber}"
+2. A "Name: ___________  Date: ___________" line at the top
+3. Section A — In-class practice (a "fill-blanks" block with 4-5 sentences, with a word bank)
+4. Section B — Multiple choice (a "multiple-choice" block with 3-4 questions, options A/B/C/D, include answerIndex)
+5. Section C — Take-home (a "homework" block with 3-4 short tasks students complete at home)
+6. An encouraging image (alt text describing a relevant illustration)
+7. A "tip" block at the bottom: "Complete Section A and B in class. Take Section C home."
+
+Return JSON for a PageContent with type: "exercise".`;
+  }
+
   return `Generate an EXERCISE page for Lesson ${lessonNumber} (${topic}) of ${input.level.fullLabel} ${input.subject.name}.
 
 The exercise should reinforce the lesson. Include a mix of:
@@ -369,9 +487,22 @@ export async function* generateBook(
   input: GenerateBookInput,
   opts: { research?: boolean; signal?: AbortSignal } = {}
 ): AsyncGenerator<GenerateBookProgress> {
-  const systemPrompt = buildSystemPrompt(input.level, input.subject);
-  const lessonsCount = input.lessons ?? Math.min(4, input.topics.length);
-  const topics = input.topics.slice(0, lessonsCount);
+  // Compute condensing plan
+  const plan = input.targetPages
+    ? planCondensing(input.targetPages, input.topics)
+    : {
+        mode: "full" as GenerationMode,
+        lessonsToGenerate: input.lessons ?? Math.min(4, input.topics.length),
+        topicsToUse: input.topics.slice(0, input.lessons ?? Math.min(4, input.topics.length)),
+        pagesPerLesson: 3,
+        estimatedTotalPages: FIXED_PAGES + 3 * (input.lessons ?? Math.min(4, input.topics.length)),
+        description: `Full mode (default)`,
+      };
+
+  const systemPrompt = buildSystemPrompt(input.level, input.subject, plan.mode);
+  const topics = plan.topicsToUse;
+
+  yield { type: "log", message: plan.description };
 
   // 1. Book meta
   const meta = await generateBookMeta(input);
@@ -387,11 +518,11 @@ export async function* generateBook(
 
   // 3. TOC
   yield { type: "page-start", pageIndex, pageType: "toc", pageTitle: "Table of Contents" };
-  const toc = await generatePageJson(systemPrompt, buildTocPrompt(input), input.level);
+  const toc = await generatePageJson(systemPrompt, buildTocPrompt(input, plan), input.level);
   yield { type: "page-done", pageIndex, pageType: "toc", pageTitle: "Table of Contents", page: toc };
   pageIndex++;
 
-  // 4. Lessons — each lesson has lesson + exercise + homework
+  // 4. Lessons — each lesson has lesson + (exercise + homework | combined exercise/homework | nothing)
   for (let i = 0; i < topics.length; i++) {
     if (opts.signal?.aborted) return;
     const topic = topics[i];
@@ -412,31 +543,36 @@ export async function* generateBook(
     yield { type: "page-start", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}` };
     const lesson = await generatePageJson(
       systemPrompt,
-      buildLessonPrompt(input, topic, lessonNum, research),
+      buildLessonPrompt(input, topic, lessonNum, research, plan.mode),
       input.level
     );
     yield { type: "page-done", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}`, page: lesson };
     pageIndex++;
 
-    // Exercise page
-    yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: `Exercise ${lessonNum}` };
+    // Skip exercise/homework in compact mode (lesson already has embedded exercise)
+    if (plan.mode === "compact") continue;
+
+    // Exercise page (or combined exercise+homework in condensed mode)
+    yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}` };
     const exercise = await generatePageJson(
       systemPrompt,
-      buildExercisePrompt(input, topic, lessonNum),
+      buildExercisePrompt(input, topic, lessonNum, plan.mode),
       input.level
     );
-    yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: `Exercise ${lessonNum}`, page: exercise };
+    yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}`, page: exercise };
     pageIndex++;
 
-    // Homework page
-    yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
-    const hw = await generatePageJson(
-      systemPrompt,
-      buildHomeworkPrompt(input, topic, lessonNum),
-      input.level
-    );
-    yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
-    pageIndex++;
+    // Homework page — only in full mode
+    if (plan.mode === "full") {
+      yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
+      const hw = await generatePageJson(
+        systemPrompt,
+        buildHomeworkPrompt(input, topic, lessonNum),
+        input.level
+      );
+      yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
+      pageIndex++;
+    }
   }
 
   // 5. Glossary
@@ -455,5 +591,5 @@ export async function* generateBook(
   yield { type: "page-done", pageIndex, pageType: "closing", pageTitle: "Well Done!", page: closing };
   pageIndex++;
 
-  yield { type: "complete", message: `Generated ${pageIndex} pages.` };
+  yield { type: "complete", message: `Generated ${pageIndex} pages (${plan.mode} mode).` };
 }

@@ -22,6 +22,10 @@ import {
   Loader2,
   Globe,
   Search,
+  FileText,
+  Layers,
+  Zap,
+  Minimize2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +37,46 @@ interface GeneratedPage {
   pageTitle?: string;
   page?: { type: string; title?: string; blocks: unknown[] };
 }
+
+// Mirror of the condensing logic in src/lib/generator.ts (kept here for the
+// live UI preview). The server is the source of truth — this is just for
+// showing the user what will happen before they click Generate.
+const FIXED_PAGES = 4;
+type Mode = "full" | "condensed" | "compact";
+interface Plan {
+  mode: Mode;
+  lessons: number;
+  totalPages: number;
+  description: string;
+}
+function computePlan(targetPages: number | null, topicCount: number): Plan {
+  if (!targetPages || topicCount === 0) {
+    return {
+      mode: "full",
+      lessons: topicCount,
+      totalPages: FIXED_PAGES + 3 * topicCount,
+      description: "No page limit — full mode (3 pages per lesson).",
+    };
+  }
+  const available = Math.max(0, targetPages - FIXED_PAGES);
+  if (available >= 3 * topicCount) {
+    return { mode: "full", lessons: topicCount, totalPages: FIXED_PAGES + 3 * topicCount, description: "Full mode — each lesson gets a lesson page, exercise, and homework." };
+  }
+  if (available >= 2 * topicCount) {
+    return { mode: "condensed", lessons: topicCount, totalPages: FIXED_PAGES + 2 * topicCount, description: "Condensed mode — each lesson gets a lesson page + a combined practice & homework page." };
+  }
+  if (available >= topicCount) {
+    return { mode: "compact", lessons: topicCount, totalPages: FIXED_PAGES + topicCount, description: "Compact mode — each lesson is a single page with an embedded exercise." };
+  }
+  const fit = Math.max(1, available);
+  return { mode: "compact", lessons: fit, totalPages: FIXED_PAGES + fit, description: `Compact mode (truncated) — only ${fit} of ${topicCount} topics fit in ${targetPages} pages.` };
+}
+
+const MODE_META: Record<Mode, { label: string; icon: React.ReactNode; color: string }> = {
+  full: { label: "Full", icon: <Layers className="h-3.5 w-3.5" />, color: "bg-emerald-100 text-emerald-700 border-emerald-300" },
+  condensed: { label: "Condensed", icon: <Zap className="h-3.5 w-3.5" />, color: "bg-amber-100 text-amber-700 border-amber-300" },
+  compact: { label: "Compact", icon: <Minimize2 className="h-3.5 w-3.5" />, color: "bg-rose-100 text-rose-700 border-rose-300" },
+};
 
 export function GeneratorView() {
   const { openEditor, goLibrary } = useQuillStore();
@@ -48,6 +92,8 @@ export function GeneratorView() {
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
   const [lessons, setLessons] = useState<number>(3);
   const [research, setResearch] = useState<boolean>(true);
+  const [targetPages, setTargetPages] = useState<number>(20);
+  const [useTargetPages, setUseTargetPages] = useState<boolean>(false);
 
   // Reset topics when subject/term/level changes
   useEffect(() => {
@@ -70,6 +116,12 @@ export function GeneratorView() {
       setSubject(availableSubjects[0]?.id ?? "english");
     }
   }, [availableSubjects, subject]);
+
+  // Live condensing plan preview
+  const plan = useMemo(
+    () => computePlan(useTargetPages ? targetPages : null, selectedTopics.length),
+    [useTargetPages, targetPages, selectedTopics.length]
+  );
 
   // Generation state
   const [generating, setGenerating] = useState(false);
@@ -115,6 +167,7 @@ export function GeneratorView() {
           topics: selectedTopics,
           lessons,
           research,
+          targetPages: useTargetPages ? targetPages : undefined,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -360,8 +413,7 @@ export function GeneratorView() {
             <div>
               <h2 className="font-display text-2xl font-bold text-foreground">Pick the topics</h2>
               <p className="mt-1 text-muted-foreground">
-                Selected: {selectedTopics.length} of {availableTopics.length}. Each topic becomes one lesson with
-                exercises and homework.
+                Selected: {selectedTopics.length} of {availableTopics.length}. Each topic becomes a lesson.
               </p>
             </div>
             <div className="flex gap-2">
@@ -403,27 +455,91 @@ export function GeneratorView() {
             })}
           </div>
 
-          {/* Lessons count + research toggle */}
+          {/* Page count + condensing plan */}
           <Card className="border-quill/20 bg-quill/5">
             <CardContent className="space-y-4 p-5">
-              <div>
-                <Label className="mb-2 block text-sm font-medium">
-                  Number of lessons to generate: <span className="font-bold text-quill">{lessons}</span>
-                </Label>
-                <input
-                  type="range"
-                  min={1}
-                  max={Math.min(8, selectedTopics.length || availableTopics.length)}
-                  value={lessons}
-                  onChange={(e) => setLessons(parseInt(e.target.value))}
-                  className="w-full accent-quill"
-                />
-                <div className="mt-1 flex justify-between text-xs text-muted-foreground">
-                  <span>1 lesson (3 pages)</span>
-                  <span>{Math.min(8, selectedTopics.length || availableTopics.length)} lessons</span>
+              <div className="flex items-start justify-between gap-3 border-b border-quill/10 pb-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="target-toggle" className="flex items-center gap-1.5 text-sm font-medium">
+                    <FileText className="h-4 w-4 text-quill" />
+                    Limit total pages
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Set a target page count. Quill will automatically condense the book to fit (full → condensed → compact).
+                  </p>
                 </div>
+                <Switch id="target-toggle" checked={useTargetPages} onCheckedChange={setUseTargetPages} />
               </div>
 
+              {useTargetPages && (
+                <div className="space-y-2">
+                  <Label className="flex items-center justify-between text-sm font-medium">
+                    <span>Target page count</span>
+                    <span className="font-bold text-quill">{targetPages ?? 20} pages</span>
+                  </Label>
+                  <input
+                    type="range"
+                    min={6}
+                    max={100}
+                    value={targetPages ?? 20}
+                    onChange={(e) => setTargetPages(parseInt(e.target.value))}
+                    className="w-full accent-quill"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>6 (1 lesson, compact)</span>
+                    <span>100 (full book)</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Live condensing plan preview */}
+              {selectedTopics.length > 0 && (
+                <div className="rounded-lg border border-quill/20 bg-white/50 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-foreground">Generation plan</span>
+                    <Badge variant="outline" className={cn("text-[10px]", MODE_META[plan.mode].color)}>
+                      {MODE_META[plan.mode].icon}
+                      <span className="ml-1">{MODE_META[plan.mode].label}</span>
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{plan.description}</p>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                    <span className="text-muted-foreground">
+                      Lessons: <span className="font-semibold text-foreground">{plan.lessons}</span>
+                    </span>
+                    <span className="text-muted-foreground">
+                      Fixed pages: <span className="font-semibold text-foreground">{FIXED_PAGES}</span>
+                      <span className="text-muted-foreground/70"> (cover, TOC, glossary, closing)</span>
+                    </span>
+                    <span className="text-muted-foreground">
+                      Total: <span className="font-bold text-quill">{plan.totalPages} pages</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Lessons slider — only shown when NOT using target pages */}
+              {!useTargetPages && (
+                <div className="border-t border-quill/10 pt-3">
+                  <Label className="mb-2 block text-sm font-medium">
+                    Number of lessons to generate: <span className="font-bold text-quill">{lessons}</span>
+                  </Label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={Math.min(8, selectedTopics.length || availableTopics.length)}
+                    value={lessons}
+                    onChange={(e) => setLessons(parseInt(e.target.value))}
+                    className="w-full accent-quill"
+                  />
+                  <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+                    <span>1 lesson (3 pages)</span>
+                    <span>{Math.min(8, selectedTopics.length || availableTopics.length)} lessons</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Research toggle */}
               <div className="flex items-start justify-between gap-3 border-t border-quill/10 pt-3">
                 <div className="space-y-0.5">
                   <Label htmlFor="research-toggle" className="flex items-center gap-1.5 text-sm font-medium">
@@ -457,20 +573,24 @@ export function GeneratorView() {
                   <span className="font-medium">Term {term}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Topics:</span>
+                  <span className="text-muted-foreground">Topics selected:</span>
                   <span className="font-medium">{selectedTopics.length}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Lessons:</span>
-                  <span className="font-medium">{lessons}</span>
+                  <span className="text-muted-foreground">Mode:</span>
+                  <span className="font-medium capitalize">{plan.mode}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Estimated pages:</span>
+                  <span className="font-medium">{plan.totalPages}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Web research:</span>
                   <span className="font-medium">{research ? "On" : "Off"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Estimated pages:</span>
-                  <span className="font-medium">{2 + lessons * 3 + 2} pages</span>
+                  <span className="text-muted-foreground">Page limit:</span>
+                  <span className="font-medium">{useTargetPages ? `${targetPages} pages` : "No limit"}</span>
                 </div>
               </div>
             </CardContent>
@@ -552,7 +672,7 @@ export function GeneratorView() {
             ) : (
               <>
                 <Wand2 className="mr-2 h-4 w-4" />
-                Generate book
+                Generate book ({plan.totalPages} pages)
               </>
             )}
           </Button>
