@@ -5,11 +5,14 @@
 //
 // GET /api/quill/img?url=<encoded URL>
 // The image is cached on disk so repeat requests are instant.
+//
+// For Pollinations URLs that fail (empty bytes), falls back to Z.ai generation.
 
 import { NextRequest } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
+import { generateImageViaZAI } from "@/lib/images";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -32,6 +35,20 @@ function cacheKey(url: string): string {
 export async function GET(req: NextRequest) {
   const url = new URL(req.url).searchParams.get("url");
   if (!url) return new Response("Missing url", { status: 400 });
+
+  // Handle data URLs directly (Z.ai returns these)
+  if (url.startsWith("data:")) {
+    const match = /^data:(image\/[\w+]+);base64,(.+)$/.exec(url);
+    if (!match) return new Response("Invalid data URL", { status: 400 });
+    const buf = Buffer.from(match[2], "base64");
+    return new Response(new Uint8Array(buf), {
+      headers: {
+        "Content-Type": match[1],
+        "Content-Length": String(buf.length),
+        "Cache-Control": "public, max-age=86400, immutable",
+      },
+    });
+  }
 
   // Only allow http(s) URLs
   if (!/^https?:\/\//.test(url)) {
@@ -60,8 +77,21 @@ export async function GET(req: NextRequest) {
     // Cache miss — fetch below
   }
 
-  // Fetch the remote image — retry up to 3 times because Pollinations sometimes
-  // returns an empty body on the first request (image still being generated).
+  // Extract the original prompt from Pollinations URLs for Z.ai fallback
+  const isPollinations = url.includes("pollinations.ai");
+  let fallbackPrompt: string | null = null;
+  if (isPollinations) {
+    try {
+      const u = new URL(url);
+      const promptPath = decodeURIComponent(u.pathname.replace("/prompt/", ""));
+      // Remove the modifiers we added
+      fallbackPrompt = promptPath.split(". high quality")[0].trim();
+    } catch {
+      fallbackPrompt = null;
+    }
+  }
+
+  // Fetch the remote image — retry up to 3 times
   let lastError: string | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -69,7 +99,6 @@ export async function GET(req: NextRequest) {
       const timeout = setTimeout(() => controller.abort(), 45000);
       let res: Response;
       try {
-        // Use a generic User-Agent to avoid being blocked
         res = await fetch(url, {
           signal: controller.signal,
           headers: {
@@ -90,12 +119,11 @@ export async function GET(req: NextRequest) {
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length === 0) {
         lastError = "Empty image";
-        // Wait 2s before retrying
         await new Promise((r) => setTimeout(r, 2000));
         continue;
       }
 
-      // Save to cache (best-effort — don't fail if disk is full)
+      // Save to cache
       try {
         await fs.writeFile(cachePath, buf);
       } catch {
@@ -113,6 +141,42 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
       await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  // Fallback: if Pollinations failed and we have a prompt, try Z.ai generation
+  if (fallbackPrompt) {
+    try {
+      const zaiUrl = await generateImageViaZAI(fallbackPrompt);
+      if (zaiUrl) {
+        // If Z.ai returned a data URL, serve it directly
+        if (zaiUrl.startsWith("data:")) {
+          const match = /^data:(image\/[\w+]+);base64,(.+)$/.exec(zaiUrl);
+          if (match) {
+            const buf = Buffer.from(match[2], "base64");
+            // Cache it
+            try {
+              await fs.writeFile(cachePath, buf);
+            } catch {
+              // ignore
+            }
+            return new Response(new Uint8Array(buf), {
+              headers: {
+                "Content-Type": match[1],
+                "Content-Length": String(buf.length),
+                "Cache-Control": "public, max-age=86400, immutable",
+              },
+            });
+          }
+        }
+        // If Z.ai returned a URL, redirect to it via our proxy
+        return new Response(null, {
+          status: 302,
+          headers: { Location: `/api/quill/img?url=${encodeURIComponent(zaiUrl)}` },
+        });
+      }
+    } catch (err) {
+      console.error("[quill] Z.ai fallback failed:", err);
     }
   }
 

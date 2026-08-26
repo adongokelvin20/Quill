@@ -1,15 +1,13 @@
 // Quill — Image utilities.
-// We use TWO sources so the system never depends on a single API:
-//   1. Pollinations.ai  — free, no API key, supports `flux` model. Used by default.
-//   2. Z.ai image generation SDK — fallback when Pollinations fails.
-//   3. Z.ai image search — pulls real photos / illustrations from the web.
+// Uses Z.ai image generation as PRIMARY (1024x1024, high quality) with
+// Pollinations.ai as fallback (768x768, instant, no API key).
 
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
 // 1. Pollinations.ai — text-to-image (free, no API key required)
-//    Docs: https://image.pollinations.ai/prompt/{prompt}?width=&height=&model=&nologo=true
+//    Used as a fallback when Z.ai is unavailable.
 // ---------------------------------------------------------------------------
 
 const POLLINATIONS_BASE = "https://image.pollinations.ai/prompt";
@@ -27,20 +25,16 @@ export interface GenerateImageOptions {
   prompt: string;
   width?: number;
   height?: number;
-  // Model: "flux" | "flux-realism" | "flux-anime" | "flux-3d" | "turbo"
   model?: string;
-  // Optional seed for reproducibility
   seed?: number;
-  // If true, do not show the Pollinations watermark
   noLogo?: boolean;
-  // If true, enhance the prompt with kid-friendly illustration modifiers
   enhance?: boolean;
 }
 
 /**
- * Generate an image using Pollinations.ai (free, no API key).
- * The URL itself is the generator — Pollinations renders the image on-demand.
- * This means we can return the URL immediately without any network wait.
+ * Build a Pollinations image URL. The URL itself is the generator — Pollinations
+ * renders the image on-demand when the browser loads it.
+ * Uses `flux-realism` model by default for better quality than `flux`.
  */
 export function pollinationsImageUrl(opts: GenerateImageOptions): string {
   const {
@@ -72,30 +66,51 @@ const GLOBAL_ILLUSTRATION_MODIFIERS =
   "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, no text, no watermark, no signature";
 
 // ---------------------------------------------------------------------------
-// 2. Z.ai image generation (fallback)
+// 2. Z.ai image generation — PRIMARY (higher quality, true 1024x1024)
 // ---------------------------------------------------------------------------
 
 export async function generateImageViaZAI(
   prompt: string,
-  opts: { width?: number; height?: number } = {}
+  opts: { width?: number; height?: number; retries?: number } = {}
 ): Promise<string | null> {
-  try {
-    const zai = await ZAI.create();
-    const sizes = pickZaiSize(opts.width ?? 1024, opts.height ?? 1024);
-    const res = await zai.images.generations.create({
-      prompt: `${prompt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`,
-      size: sizes,
-    });
-    // Z.ai returns either a URL or base64 — handle both.
-    const data = (res as unknown as { data?: Array<{ url?: string; b64_json?: string }> }).data ?? [];
-    const first = data[0];
-    if (!first) return null;
-    if (first.url) return first.url;
-    if (first.b64_json) return `data:image/png;base64,${first.b64_json}`;
-    return null;
-  } catch {
-    return null;
+  const retries = opts.retries ?? 2;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const zai = await ZAI.create();
+      const sizes = pickZaiSize(opts.width ?? 1024, opts.height ?? 1024);
+      const res = await zai.images.generations.create({
+        prompt: `${prompt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`,
+        size: sizes,
+      });
+
+      // Z.ai returns base64 in the `base64` field (not `b64_json`)
+      const data = (res as unknown as { data?: Array<{ base64?: string; url?: string; b64_json?: string }> }).data ?? [];
+      const first = data[0];
+      if (!first) {
+        if (attempt < retries) {
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          continue;
+        }
+        return null;
+      }
+
+      // Prefer URL, then base64, then b64_json
+      if (first.url) return first.url;
+      const b64 = first.base64 ?? first.b64_json;
+      if (b64) return `data:image/jpeg;base64,${b64}`;
+      return null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[quill] Z.ai image generation failed (attempt ${attempt + 1}):`, msg);
+      // If rate limited, wait longer before retry
+      if (msg.includes("429") && attempt < retries) {
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+        continue;
+      }
+      return null;
+    }
   }
+  return null;
 }
 
 function pickZaiSize(w: number, h: number): "1024x1024" | "1024x1792" | "1792x1024" {
@@ -131,36 +146,37 @@ export async function searchImages(
 }
 
 // ---------------------------------------------------------------------------
-// 4. Combined generator used by the API route — caches to DB for reuse
+// 4. Combined generator — tries Z.ai first, falls back to Pollinations
 // ---------------------------------------------------------------------------
 
 export async function generateOrCacheImage(opts: GenerateImageOptions): Promise<GeneratedImage> {
   const prompt = opts.prompt.trim();
-  // Always include a random seed unless explicitly provided. Pollinations caches
-  // by URL — without a unique seed, repeat requests for the same prompt return
-  // an empty body (the image has been "claimed" by the first request).
   const seed = opts.seed ?? Math.floor(Math.random() * 1_000_000);
 
-  // Cache check — same prompt + size returns same URL (skip cache if no seed was
-  // provided, because we want a fresh image each time)
-  if (opts.seed !== undefined) {
-    const cached = await db.asset.findFirst({
-      where: { prompt, source: "generated", width: opts.width ?? 1024, height: opts.height ?? 1024 },
-      orderBy: { createdAt: "desc" },
-    });
-    if (cached) {
-      return {
-        url: cached.url,
-        source: "pollinations",
-        width: cached.width ?? 1024,
-        height: cached.height ?? 1024,
+  // Try Z.ai first (higher quality, true 1024x1024)
+  const zaiUrl = await generateImageViaZAI(prompt, { width: opts.width, height: opts.height });
+  if (zaiUrl) {
+    await db.asset.create({
+      data: {
+        source: "generated",
         prompt,
-        cached: true,
-      };
-    }
+        url: zaiUrl,
+        width: opts.width ?? 1024,
+        height: opts.height ?? 1024,
+        alt: prompt.slice(0, 200),
+      },
+    });
+    return {
+      url: zaiUrl,
+      source: "zai-gen",
+      width: opts.width ?? 1024,
+      height: opts.height ?? 1024,
+      prompt,
+      cached: false,
+    };
   }
 
-  // Pollinations URL — instant, image renders on-demand
+  // Fallback: Pollinations URL (instant, image renders on-demand)
   const url = pollinationsImageUrl({ ...opts, seed });
 
   await db.asset.create({
@@ -182,4 +198,29 @@ export async function generateOrCacheImage(opts: GenerateImageOptions): Promise<
     prompt,
     cached: false,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 5. High-quality image generator used by the book generator.
+//    Returns a data URL (Z.ai) or a Pollinations URL (fallback).
+//    This is called during book generation to produce the best possible images.
+// ---------------------------------------------------------------------------
+
+export async function generateHighQualityImage(prompt: string): Promise<{ url: string; source: "zai-gen" | "pollinations" }> {
+  // Try Z.ai first
+  const zaiUrl = await generateImageViaZAI(prompt);
+  if (zaiUrl) {
+    return { url: zaiUrl, source: "zai-gen" };
+  }
+
+  // Fallback to Pollinations with flux-realism for better quality
+  const seed = Math.floor(Math.random() * 1_000_000);
+  const url = pollinationsImageUrl({
+    prompt,
+    width: 1024,
+    height: 1024,
+    model: "flux",
+    seed,
+  });
+  return { url, source: "pollinations" };
 }

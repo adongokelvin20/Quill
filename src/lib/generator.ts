@@ -20,6 +20,11 @@ import ZAI from "z-ai-web-dev-sdk";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
 import { researchTopic } from "@/lib/research";
+import { generateHighQualityImage } from "@/lib/images";
+
+// Global modifiers that push the model toward clean, kid-friendly illustrations.
+const GLOBAL_ILLUSTRATION_MODIFIERS =
+  "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, no text, no watermark, no signature";
 
 export type GenerationMode = "full" | "condensed" | "compact";
 
@@ -327,12 +332,14 @@ Return JSON for a PageContent with type: "closing".`;
 async function generatePageJson(
   systemPrompt: string,
   userPrompt: string,
-  level: LevelInfo
+  level: LevelInfo,
+  onProgress?: (msg: string) => void
 ): Promise<PageContent> {
   const zai = await ZAI.create();
 
-  const tryOnce = async (): Promise<PageContent | null> => {
+  const tryOnce = async (attempt: number): Promise<PageContent | null> => {
     try {
+      onProgress?.(`Generating content (attempt ${attempt})...`);
       const res = await zai.chat.completions.create({
         messages: [
           { role: "system", content: systemPrompt },
@@ -340,43 +347,69 @@ async function generatePageJson(
         ],
         // Higher temperature for KG (more creative), lower for JHS (more precise)
         temperature: level.complexity <= 2 ? 0.8 : 0.6,
-        max_tokens: 2400,
+        max_tokens: 2800,
       });
       const raw = res.choices?.[0]?.message?.content ?? "";
-      return parsePageJson(raw);
+      if (!raw || raw.trim().length < 10) {
+        console.error("[quill] Empty LLM response on attempt", attempt);
+        return null;
+      }
+      const parsed = parsePageJson(raw);
+      if (!parsed) {
+        console.error("[quill] JSON parse failed on attempt", attempt, "raw length:", raw.length);
+      }
+      return parsed;
     } catch (err) {
-      console.error("[quill] generatePageJson error:", err);
+      console.error("[quill] generatePageJson error on attempt", attempt, err);
       return null;
     }
   };
 
-  let page = await tryOnce();
+  // Try up to 3 times with different temperatures
+  let page = await tryOnce(1);
   if (!page) {
-    // One retry with a "you MUST output JSON only" reminder
+    // Retry with lower temperature and explicit JSON reminder
+    onProgress?.("Retrying with stricter formatting...");
     const res = await zai.chat.completions.create({
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
-        { role: "system", content: "Reminder: output ONLY the JSON object, no markdown, no explanation." },
+        { role: "system", content: "CRITICAL: Your previous response was not valid JSON. Output ONLY the JSON object now. No markdown fences, no explanation, no text before or after. Start with { and end with }." },
       ],
-      temperature: 0.3,
-      max_tokens: 2400,
+      temperature: 0.2,
+      max_tokens: 2800,
     });
     const raw = res.choices?.[0]?.message?.content ?? "";
     page = parsePageJson(raw);
   }
   if (!page) {
-    // Fallback: minimal page
+    // Third try with minimal prompt
+    onProgress?.("Final retry...");
+    const res = await zai.chat.completions.create({
+      messages: [
+        { role: "system", content: "Output a JSON object for a lesson page. Start with { and end with }." },
+        { role: "user", content: userPrompt.slice(0, 500) },
+      ],
+      temperature: 0.1,
+      max_tokens: 2000,
+    });
+    const raw = res.choices?.[0]?.message?.content ?? "";
+    page = parsePageJson(raw);
+  }
+  if (!page) {
+    // Fallback: minimal page with the topic name
+    onProgress?.("Using fallback content...");
     page = {
       type: "lesson",
       title: "Lesson",
       blocks: [
         { id: makeId(), type: "heading", text: "Lesson" },
-        { id: makeId(), type: "paragraph", text: "Content could not be generated. Please regenerate this page." },
+        { id: makeId(), type: "paragraph", text: "This page could not be generated automatically. Please use the editor to add content manually, or try regenerating the book." },
+        { id: makeId(), type: "tip", title: "Tip", text: "You can edit any page in the editor by clicking on it and using the block panel on the right." },
       ],
     };
   }
-  return sanitisePage(page);
+  return sanitisePage(page, onProgress);
 }
 
 function parsePageJson(raw: string): PageContent | null {
@@ -405,31 +438,53 @@ function parsePageJson(raw: string): PageContent | null {
   }
 }
 
-function sanitisePage(page: PageContent): PageContent {
+async function sanitisePage(page: PageContent, onProgress?: (msg: string) => void): Promise<PageContent> {
   // Ensure every block has an id
   const blocks = (page.blocks ?? []).map((b) =>
     (b as Block).id ? (b as Block) : { ...(b as Block), id: makeId() }
   ) as Block[];
 
-  // Replace PLACEHOLDER image URLs with real Pollinations URLs (based on alt text)
-  const resolvedBlocks = blocks.map((b) => {
-    if (b.type === "image" && (!b.url || b.url === "PLACEHOLDER")) {
-      const alt = b.alt?.trim() || "children's book illustration";
-      // Build a Pollinations URL — image renders on-demand when the browser loads it.
-      const enhanced = `${alt}. high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, no text, no watermark, no signature`;
-      const encoded = encodeURIComponent(enhanced.slice(0, 1800));
-      // Include a unique seed so Pollinations doesn't return empty bytes for repeat
-      // requests of the same prompt (it caches by URL).
+  // Find all image blocks that need URLs
+  const imageBlocks = blocks.filter(
+    (b): b is Extract<Block, { type: "image" }> =>
+      b.type === "image" && (!b.url || b.url === "PLACEHOLDER")
+  );
+
+  if (imageBlocks.length === 0) {
+    return { ...page, blocks };
+  }
+
+  onProgress?.(`Generating ${imageBlocks.length} illustration${imageBlocks.length > 1 ? "s" : ""} in HD...`);
+
+  // Generate images one at a time to avoid Z.ai rate limits (429).
+  // Z.ai generation takes 5-15s per image, so we process them sequentially
+  // with a small delay between requests.
+  const resolvedImages = new Map<string, { url: string; source: "zai-gen" | "pollinations" }>();
+
+  for (const block of imageBlocks) {
+    const alt = block.alt?.trim() || "children's book illustration";
+    try {
+      const result = await generateHighQualityImage(alt);
+      resolvedImages.set(block.id, { url: result.url, source: result.source });
+    } catch (err) {
+      console.error("[quill] Image generation failed for:", alt.slice(0, 50), err);
+      // Last resort: Pollinations URL (instant, renders on-demand)
       const seed = Math.floor(Math.random() * 1_000_000);
-      const params = new URLSearchParams({
-        width: "1024",
-        height: "1024",
-        model: "flux",
-        nologo: "true",
-        seed: String(seed),
-      });
-      const url = `https://image.pollinations.ai/prompt/${encoded}?${params.toString()}`;
-      return { ...b, url, source: "generated" as const };
+      const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
+      const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
+      resolvedImages.set(block.id, { url, source: "pollinations" });
+    }
+    // Small delay between image generations to avoid rate limits
+    if (imageBlocks.length > 1) {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
+  // Replace image blocks with resolved URLs
+  const resolvedBlocks = blocks.map((b) => {
+    if (b.type === "image" && resolvedImages.has(b.id)) {
+      const result = resolvedImages.get(b.id)!;
+      return { ...b, url: result.url, source: "generated" as const };
     }
     return b;
   }) as Block[];
@@ -452,7 +507,7 @@ export async function generateBookMeta(input: GenerateBookInput): Promise<{
       messages: [
         {
           role: "system",
-          content: "You are Quill, a Ghana Education Service textbook editor. Output a single JSON object only.",
+          content: "You are Quill, a Ghana Education Service textbook editor. Output a single JSON object only. No markdown fences, no text before or after.",
         },
         {
           role: "user",
@@ -463,8 +518,31 @@ export async function generateBookMeta(input: GenerateBookInput): Promise<{
       max_tokens: 400,
     });
     const raw = res.choices?.[0]?.message?.content ?? "";
-    const parsed = parsePageJson(`{${raw.slice(raw.indexOf("{") + 1, raw.lastIndexOf("}"))}}`);
-    if (parsed) return parsed as unknown as { title: string; subtitle: string; description: string };
+
+    // Try to parse as JSON directly
+    let parsed: { title?: string; subtitle?: string; description?: string } | null = null;
+    try {
+      parsed = JSON.parse(raw.trim());
+    } catch {
+      // Try to extract JSON from the response
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        try {
+          parsed = JSON.parse(raw.slice(start, end + 1));
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+
+    if (parsed && parsed.title) {
+      return {
+        title: parsed.title,
+        subtitle: parsed.subtitle ?? `Term ${input.term} • Quill Series`,
+        description: parsed.description ?? `A ${input.subject.name} textbook for ${input.level.fullLabel}.`,
+      };
+    }
     return {
       title: `${input.subject.name} for ${input.level.fullLabel}`,
       subtitle: `Term ${input.term} • Quill Series`,
@@ -504,21 +582,47 @@ export async function* generateBook(
 
   yield { type: "log", message: plan.description };
 
+  // Progress callback that yields log events
+  const onProgress = (msg: string) => {
+    // We can't yield from a callback, so we store the message for the next yield
+    pendingLog = msg;
+  };
+  let pendingLog: string | null = null;
+
+  const flushLog = function* () {
+    if (pendingLog) {
+      const msg = pendingLog;
+      pendingLog = null;
+      yield { type: "log" as const, message: msg };
+    }
+  };
+
   // 1. Book meta
   const meta = await generateBookMeta(input);
   yield { type: "book-meta", book: meta };
 
   let pageIndex = 0;
 
+  // Helper to generate a page and flush any pending logs
+  const genPage = async (
+    pageType: PageType,
+    pageTitle: string,
+    userPrompt: string
+  ): Promise<PageContent> => {
+    return generatePageJson(systemPrompt, userPrompt, input.level, onProgress);
+  };
+
   // 2. Cover
   yield { type: "page-start", pageIndex, pageType: "cover", pageTitle: "Cover" };
-  const cover = await generatePageJson(systemPrompt, buildCoverPrompt(input), input.level);
+  const cover = await genPage("cover", "Cover", buildCoverPrompt(input));
+  yield* flushLog();
   yield { type: "page-done", pageIndex, pageType: "cover", pageTitle: "Cover", page: cover };
   pageIndex++;
 
   // 3. TOC
   yield { type: "page-start", pageIndex, pageType: "toc", pageTitle: "Table of Contents" };
-  const toc = await generatePageJson(systemPrompt, buildTocPrompt(input, plan), input.level);
+  const toc = await genPage("toc", "Table of Contents", buildTocPrompt(input, plan));
+  yield* flushLog();
   yield { type: "page-done", pageIndex, pageType: "toc", pageTitle: "Table of Contents", page: toc };
   pageIndex++;
 
@@ -541,11 +645,8 @@ export async function* generateBook(
 
     // Lesson page
     yield { type: "page-start", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}` };
-    const lesson = await generatePageJson(
-      systemPrompt,
-      buildLessonPrompt(input, topic, lessonNum, research, plan.mode),
-      input.level
-    );
+    const lesson = await genPage("lesson", `Lesson ${lessonNum}: ${topic}`, buildLessonPrompt(input, topic, lessonNum, research, plan.mode));
+    yield* flushLog();
     yield { type: "page-done", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}`, page: lesson };
     pageIndex++;
 
@@ -553,23 +654,18 @@ export async function* generateBook(
     if (plan.mode === "compact") continue;
 
     // Exercise page (or combined exercise+homework in condensed mode)
-    yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}` };
-    const exercise = await generatePageJson(
-      systemPrompt,
-      buildExercisePrompt(input, topic, lessonNum, plan.mode),
-      input.level
-    );
-    yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}`, page: exercise };
+    const exTitle = plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}`;
+    yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: exTitle };
+    const exercise = await genPage("exercise", exTitle, buildExercisePrompt(input, topic, lessonNum, plan.mode));
+    yield* flushLog();
+    yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: exTitle, page: exercise };
     pageIndex++;
 
     // Homework page — only in full mode
     if (plan.mode === "full") {
       yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
-      const hw = await generatePageJson(
-        systemPrompt,
-        buildHomeworkPrompt(input, topic, lessonNum),
-        input.level
-      );
+      const hw = await genPage("homework", `Homework ${lessonNum}`, buildHomeworkPrompt(input, topic, lessonNum));
+      yield* flushLog();
       yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
       pageIndex++;
     }
@@ -577,17 +673,15 @@ export async function* generateBook(
 
   // 5. Glossary
   yield { type: "page-start", pageIndex, pageType: "glossary", pageTitle: "Glossary" };
-  const glossary = await generatePageJson(
-    systemPrompt,
-    `Generate a GLOSSARY page for the ${input.subject.name} book. List 10-15 key terms covered across the lessons, each with a one-sentence meaning appropriate for ${input.level.fullLabel}. Use a "vocabulary" block. Return JSON for a PageContent with type: "glossary".`,
-    input.level
-  );
+  const glossary = await genPage("glossary", "Glossary", `Generate a GLOSSARY page for the ${input.subject.name} book. List 10-15 key terms covered across the lessons, each with a one-sentence meaning appropriate for ${input.level.fullLabel}. Use a "vocabulary" block. Return JSON for a PageContent with type: "glossary".`);
+  yield* flushLog();
   yield { type: "page-done", pageIndex, pageType: "glossary", pageTitle: "Glossary", page: glossary };
   pageIndex++;
 
   // 6. Closing
   yield { type: "page-start", pageIndex, pageType: "closing", pageTitle: "Well Done!" };
-  const closing = await generatePageJson(systemPrompt, buildClosingPrompt(input), input.level);
+  const closing = await genPage("closing", "Well Done!", buildClosingPrompt(input));
+  yield* flushLog();
   yield { type: "page-done", pageIndex, pageType: "closing", pageTitle: "Well Done!", page: closing };
   pageIndex++;
 

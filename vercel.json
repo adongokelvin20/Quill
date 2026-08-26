@@ -13,7 +13,7 @@
       "maxDuration": 60
     },
     "src/app/api/quill/image/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 120
     },
     "src/app/api/quill/research/route.ts": {
       "maxDuration": 60

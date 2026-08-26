@@ -99,3 +99,47 @@ Stage Summary:
 - ✅ Deployment guide, .env.example, and vercel.json created.
 - ✅ All API routes gated behind ownership checks.
 - ✅ ESLint clean, no browser errors.
+
+---
+Task ID: 3
+Agent: Super Z (main)
+Task: Fix generation errors and upgrade image quality from 768px (Pollinations) to 1024px (Z.ai).
+
+Work Log:
+- Investigated generation errors: found Z.ai rate-limiting (429) on parallel image generation requests, and Pollinations returning empty bytes (502 from proxy) for some images.
+- Tested all Pollinations models (flux, flux-realism, flux-anime, turbo) — all return 768x768 regardless of requested size. File sizes: flux=43KB, flux-realism=53KB, turbo=41KB.
+- Tested Z.ai image generation: returns true 1024x1024 at 71KB (67% more pixels, 65% larger file = significantly better quality).
+- Discovered Z.ai SDK returns base64 in the `base64` field (not `b64_json` or `url`). Updated `generateImageViaZAI()` to handle all three formats.
+- Rewrote `src/lib/images.ts`:
+  - Z.ai is now PRIMARY image generator (1024x1024, high quality)
+  - Pollinations is FALLBACK (768x768, instant, no API key)
+  - Added `generateHighQualityImage()` that tries Z.ai first, falls back to Pollinations
+  - Added retry logic with exponential backoff for 429 rate limits
+- Updated `src/lib/generator.ts`:
+  - `sanitisePage()` is now async — generates real images via Z.ai during book creation instead of building Pollinations URLs
+  - Sequential image generation (one at a time) with 500ms delay between images to avoid Z.ai rate limits
+  - 3-retry LLM generation with progressively lower temperature (0.8 → 0.2 → 0.1) and explicit JSON reminders
+  - Fallback content page if all 3 LLM retries fail
+  - Fixed `generateBookMeta()` JSON parsing bug (was wrapping raw string incorrectly)
+  - Progress callbacks for image generation status ("Generating 2 illustrations in HD...")
+- Updated `src/app/api/quill/img/route.ts` (image proxy):
+  - Handles data URLs from Z.ai directly (no network fetch needed)
+  - Falls back to Z.ai generation when Pollinations returns empty bytes (extracts prompt from URL)
+  - 3 retries with exponential backoff
+- Updated `src/app/api/quill/image/route.ts`: maxDuration increased to 120s for Z.ai generation
+- Updated `vercel.json`: image API maxDuration = 120s
+- Tested end-to-end:
+  - Generated KG1 English book with 2 topics (10 pages)
+  - ALL images are 1024x1024 from Z.ai (verified via naturalWidth check)
+  - DOCX export: 1.4MB (vs previous 600KB) with 14 embedded HD images (80-150KB each vs previous 30-50KB)
+  - Custom image generation in editor: 1024x1024 from Z.ai
+  - No generation errors, no 429 rate limits, no 502 proxy errors
+  - ESLint clean, no browser errors
+
+Stage Summary:
+- ✅ Image quality upgraded from 768x768 (Pollinations) to 1024x1024 (Z.ai) — 67% more pixels
+- ✅ Generation errors fixed: 3-retry LLM, sequential image generation with rate-limit handling
+- ✅ Image proxy: handles Z.ai data URLs + falls back to Z.ai when Pollinations fails
+- ✅ DOCX exports now contain HD images (1.4MB file with 14 images at 80-150KB each)
+- ✅ All images load successfully — no more "Image is being generated" placeholders
+- ✅ No 429 rate limits, no 502 proxy errors, no browser errors

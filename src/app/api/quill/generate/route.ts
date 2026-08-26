@@ -9,7 +9,7 @@ import { LEVELS, SUBJECTS, getLevel } from "@/lib/curriculum";
 import { getCurrentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
-export const maxDuration = 300; // 5 minutes — Vercel Pro allows up to 300s
+export const maxDuration = 300; // 5 minutes — image generation adds time per page
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
