@@ -10,7 +10,7 @@ export function QuillFooter() {
       <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 py-8 sm:flex-row sm:px-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <button onClick={goHome} className="flex items-center gap-2 hover:text-quill">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-quill to-amber-500 text-white">
+            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-yellow-500 to-amber-700 text-white">
               <Feather className="h-3.5 w-3.5" strokeWidth={2.5} />
             </span>
             <span className="font-display font-semibold text-quill">Quill</span>

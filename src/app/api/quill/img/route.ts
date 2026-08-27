@@ -1,12 +1,12 @@
 // Quill — Image proxy.
-// Streams a remote image through our own server so the browser sees a same-origin
-// request. This avoids CORS / URL-length / content-disposition issues with
-// Pollinations and other image APIs.
+// FAST and NEVER returns 502.
 //
-// GET /api/quill/img?url=<encoded URL>
-// The image is cached on disk so repeat requests are instant.
+// Strategy:
+//   1. Check disk cache (instant)
+//   2. Race Z.ai generation vs Pollinations fetch with a 20s timeout
+//   3. If both fail, return a colorful SVG placeholder immediately
 //
-// For Pollinations URLs that fail (empty bytes), falls back to Z.ai generation.
+// Total max time: ~20 seconds. No retries that block the response.
 
 import { NextRequest } from "next/server";
 import { promises as fs } from "fs";
@@ -15,7 +15,7 @@ import crypto from "crypto";
 import { generateImageViaZAI } from "@/lib/images";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 30;
 export const dynamic = "force-dynamic";
 
 const CACHE_DIR = "/home/z/my-project/download/quill-img-cache";
@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url).searchParams.get("url");
   if (!url) return new Response("Missing url", { status: 400 });
 
-  // Handle data URLs directly (Z.ai returns these)
+  // Handle data URLs directly (Z.ai returns these — instant, no network)
   if (url.startsWith("data:")) {
     const match = /^data:(image\/[\w+]+);base64,(.+)$/.exec(url);
     if (!match) return new Response("Invalid data URL", { status: 400 });
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
   const ext = url.includes("png") ? "png" : "jpg";
   const cachePath = path.join(CACHE_DIR, `${key}.${ext}`);
 
-  // Try cache first
+  // 1. Try cache first (instant)
   try {
     const stat = await fs.stat(cachePath);
     if (stat.size > 0) {
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
       });
     }
   } catch {
-    // Cache miss — fetch below
+    // Cache miss — continue
   }
 
   // Extract the original prompt from Pollinations URLs for Z.ai fallback
@@ -84,104 +84,86 @@ export async function GET(req: NextRequest) {
     try {
       const u = new URL(url);
       const promptPath = decodeURIComponent(u.pathname.replace("/prompt/", ""));
-      // Remove the modifiers we added
       fallbackPrompt = promptPath.split(". high quality")[0].trim();
     } catch {
       fallbackPrompt = null;
     }
   }
 
-  // Fetch the remote image — retry up to 3 times
-  let lastError: string | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // 2. Race Z.ai generation vs Pollinations fetch with a 20s timeout
+  //    Whichever returns a valid image first wins.
+  const TIMEOUT_MS = 20000;
+
+  const pollinationsPromise = (async (): Promise<Buffer | null> => {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 45000);
-      let res: Response;
-      try {
-        res = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-          },
-          redirect: "follow",
-        });
-      } finally {
-        clearTimeout(timeout);
-      }
-
-      if (!res.ok) {
-        lastError = `Upstream error: ${res.status}`;
-        continue;
-      }
-
+      const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        },
+        redirect: "follow",
+      });
+      clearTimeout(timeout);
+      if (!res.ok) return null;
       const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length === 0) {
-        lastError = "Empty image";
-        await new Promise((r) => setTimeout(r, 2000));
-        continue;
-      }
+      if (buf.length === 0) return null;
+      return buf;
+    } catch {
+      return null;
+    }
+  })();
 
-      // Save to cache
+  const zaiPromise = (async (): Promise<Buffer | null> => {
+    if (!fallbackPrompt) return null;
+    try {
+      const zaiUrl = await generateImageViaZAI(fallbackPrompt, { retries: 0 });
+      if (!zaiUrl) return null;
+      if (zaiUrl.startsWith("data:")) {
+        const match = /^data:(image\/[\w+]+);base64,(.+)$/.exec(zaiUrl);
+        if (match) return Buffer.from(match[2], "base64");
+      }
+      // If Z.ai returned a URL, fetch it
+      const res = await fetch(zaiUrl, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      return buf.length > 0 ? buf : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  // Wait for either to succeed, with overall timeout
+  const overallTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), TIMEOUT_MS + 5000));
+
+  try {
+    const result = await Promise.race([
+      Promise.any([pollinationsPromise, zaiPromise]),
+      overallTimeout,
+    ]);
+
+    if (result && result.length > 0) {
+      // Cache it
       try {
-        await fs.writeFile(cachePath, buf);
+        await fs.writeFile(cachePath, result);
       } catch {
         // ignore cache write errors
       }
-
-      const contentType = res.headers.get("content-type") ?? (ext === "png" ? "image/png" : "image/jpeg");
-      return new Response(new Uint8Array(buf), {
+      return new Response(new Uint8Array(result), {
         headers: {
-          "Content-Type": contentType,
-          "Content-Length": String(buf.length),
+          "Content-Type": ext === "png" ? "image/png" : "image/jpeg",
+          "Content-Length": String(result.length),
           "Cache-Control": "public, max-age=86400, immutable",
         },
       });
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      await new Promise((r) => setTimeout(r, 1000));
     }
+  } catch {
+    // All promises rejected — fall through to placeholder
   }
 
-  // Fallback: if Pollinations failed and we have a prompt, try Z.ai generation
-  if (fallbackPrompt) {
-    try {
-      const zaiUrl = await generateImageViaZAI(fallbackPrompt);
-      if (zaiUrl) {
-        // If Z.ai returned a data URL, serve it directly
-        if (zaiUrl.startsWith("data:")) {
-          const match = /^data:(image\/[\w+]+);base64,(.+)$/.exec(zaiUrl);
-          if (match) {
-            const buf = Buffer.from(match[2], "base64");
-            // Cache it
-            try {
-              await fs.writeFile(cachePath, buf);
-            } catch {
-              // ignore
-            }
-            return new Response(new Uint8Array(buf), {
-              headers: {
-                "Content-Type": match[1],
-                "Content-Length": String(buf.length),
-                "Cache-Control": "public, max-age=86400, immutable",
-              },
-            });
-          }
-        }
-        // If Z.ai returned a URL, redirect to it via our proxy
-        return new Response(null, {
-          status: 302,
-          headers: { Location: `/api/quill/img?url=${encodeURIComponent(zaiUrl)}` },
-        });
-      }
-    } catch (err) {
-      console.error("[quill] Z.ai fallback failed:", err);
-    }
-  }
-
-  // Last resort: generate a colorful placeholder SVG so the browser ALWAYS
-  // gets a valid image. This prevents 502 errors from breaking the UI.
+  // 3. Last resort: SVG placeholder — NEVER return 502
   const placeholderSvg = generatePlaceholderSvg(fallbackPrompt || "Illustration");
   const svgBuf = Buffer.from(placeholderSvg, "utf-8");
   return new Response(new Uint8Array(svgBuf), {
@@ -195,9 +177,7 @@ export async function GET(req: NextRequest) {
 
 // Generate a colorful placeholder SVG with the prompt text
 function generatePlaceholderSvg(prompt: string): string {
-  // Truncate prompt for display
   const displayPrompt = prompt.length > 60 ? prompt.slice(0, 57) + "..." : prompt;
-  // Pick a color based on the prompt hash
   const hash = prompt.split("").reduce((a, b) => a + b.charCodeAt(0), 0);
   const hue = hash % 360;
   const bg = `hsl(${hue}, 70%, 85%)`;
@@ -211,7 +191,7 @@ function generatePlaceholderSvg(prompt: string): string {
     <rect x="156" y="300" width="200" height="20" rx="10" fill="${fg}" opacity="0.3"/>
     <rect x="176" y="340" width="160" height="14" rx="7" fill="${fg}" opacity="0.2"/>
     <text x="256" y="420" font-family="sans-serif" font-size="16" fill="${fg}" text-anchor="middle" opacity="0.7">${escapeXml(displayPrompt)}</text>
-    <text x="256" y="470" font-family="sans-serif" font-size="12" fill="${fg}" text-anchor="middle" opacity="0.5">Quill — image loading...</text>
+    <text x="256" y="470" font-family="sans-serif" font-size="12" fill="${fg}" text-anchor="middle" opacity="0.5">Quill</text>
   </svg>`;
 }
 

@@ -22,7 +22,7 @@ export function QuillHeader() {
           className="group flex items-center gap-2 transition-opacity hover:opacity-90"
           aria-label="Quill home"
         >
-          <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-quill to-amber-500 text-white shadow-sm transition-transform group-hover:scale-105">
+          <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-yellow-500 to-amber-700 text-white shadow-sm transition-transform group-hover:scale-105">
             <Feather className="h-5 w-5" strokeWidth={2.5} />
           </span>
           <span className="flex flex-col leading-none">
