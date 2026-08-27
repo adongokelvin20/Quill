@@ -65,19 +65,19 @@ function ImageBlockView({ block }: { block: Extract<Block, { type: "image" }> })
   return (
     <figure
       className={cn(
-        "my-2 flex flex-col items-center",
+        "my-4 flex flex-col items-center",
         block.align === "left" && "items-start",
         block.align === "right" && "items-end"
       )}
     >
-      <div className="relative max-w-full overflow-hidden rounded-lg bg-muted/40">
+      <div className="relative max-w-full overflow-hidden rounded-xl bg-muted/30 shadow-md ring-1 ring-border/40">
         {!loaded && !error && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-muted/60">
             <Loader2 className="h-6 w-6 animate-spin text-quill" />
           </div>
         )}
         {error ? (
-          <div className="flex aspect-square w-64 flex-col items-center justify-center gap-2 bg-muted/40 p-4 text-muted-foreground">
+          <div className="flex aspect-square w-72 flex-col items-center justify-center gap-2 bg-muted/40 p-4 text-muted-foreground">
             <ImageIcon className="h-8 w-8" />
             <span className="text-xs">Image is being generated&hellip;</span>
             <button
@@ -99,34 +99,38 @@ function ImageBlockView({ block }: { block: Extract<Block, { type: "image" }> })
             alt={block.alt}
             onLoad={() => setLoaded(true)}
             onError={() => setError(true)}
-            style={{ width: block.width ? `${block.width}px` : "100%", maxWidth: "100%", height: "auto" }}
-            className="rounded-lg"
+            style={{ width: "100%", maxWidth: "600px", height: "auto" }}
+            className="rounded-xl"
           />
         )}
       </div>
       {block.caption && (
-        <figcaption className="mt-1 text-xs italic text-muted-foreground">{block.caption}</figcaption>
+        <figcaption className="mt-2 text-center text-xs italic text-muted-foreground">{block.caption}</figcaption>
       )}
     </figure>
   );
 }
 
-export function BlockView({ block, index }: { block: Block; index: number }) {
+export function BlockView({ block, index, onCover = false }: { block: Block; index: number; onCover?: boolean }) {
   switch (block.type) {
     case "heading": {
-      const size = block.level === 1 ? "text-2xl" : block.level === 2 ? "text-xl" : "text-lg";
+      const size = block.level === 1 ? "text-3xl" : block.level === 2 ? "text-xl" : "text-lg";
       return (
-        <h2 className={cn("font-display font-bold text-quill border-b-2 border-amber-400/50 pb-1", size)}>
+        <h2 className={cn(
+          "font-display font-bold border-b-2 pb-1",
+          size,
+          onCover ? "text-yellow-300 border-yellow-400/50" : "text-blue-950 border-amber-400/50"
+        )}>
           {block.text}
         </h2>
       );
     }
 
     case "subheading":
-      return <h3 className="font-display text-lg font-semibold text-amber-700">{block.text}</h3>;
+      return <h3 className={cn("font-display text-lg font-semibold", onCover ? "text-yellow-200" : "text-amber-700")}>{block.text}</h3>;
 
     case "paragraph":
-      return <p className="text-sm leading-relaxed text-foreground/90">{block.text}</p>;
+      return <p className={cn("text-sm leading-relaxed", onCover ? "text-blue-100/90" : "text-foreground/90")}>{block.text}</p>;
 
     case "image":
       return <ImageBlockView key={block.id} block={block} />;
@@ -136,7 +140,7 @@ export function BlockView({ block, index }: { block: Block; index: number }) {
 
     case "bulleted-list":
       return (
-        <ul className="list-disc space-y-1 pl-5 text-sm">
+        <ul className={cn("list-disc space-y-1 pl-5 text-sm", onCover && "text-blue-100 marker:text-yellow-400")}>
           {block.items.map((item, i) => (
             <li key={i}>{item}</li>
           ))}
@@ -145,7 +149,7 @@ export function BlockView({ block, index }: { block: Block; index: number }) {
 
     case "numbered-list":
       return (
-        <ol className="list-decimal space-y-1 pl-5 text-sm">
+        <ol className={cn("list-decimal space-y-1 pl-5 text-sm", onCover && "text-blue-100 marker:text-yellow-400")}>
           {block.items.map((item, i) => (
             <li key={i}>{item}</li>
           ))}
@@ -334,7 +338,7 @@ export function BlockView({ block, index }: { block: Block; index: number }) {
       );
 
     case "divider":
-      return <div className="text-center text-quill">• • • • • • • • • •</div>;
+      return <div className={cn("text-center", onCover ? "text-yellow-400" : "text-blue-950")}>• • • • • • • • • •</div>;
 
     case "spacer":
       return <div style={{ height: block.height ?? 40 }} />;
@@ -355,17 +359,19 @@ export function PagePreview({ page }: { page: PageContent }) {
 
   if (isCover) {
     return (
-      <div className="flex min-h-[420px] flex-col rounded-lg border-2 border-dashed border-amber-300 bg-gradient-to-br from-quill/10 via-amber-soft/60 to-amber-200/30 p-8">
-        {page.blocks.map((b, i) => (
-          <BlockView key={b.id ?? i} block={b} index={i} />
-        ))}
+      <div className="flex min-h-[500px] flex-col rounded-xl bg-gradient-to-br from-blue-950 via-blue-900 to-blue-950 p-8 shadow-xl ring-1 ring-yellow-500/20">
+        <div className="flex-1 space-y-2">
+          {page.blocks.map((b, i) => (
+            <BlockView key={b.id ?? i} block={b} index={i} onCover={true} />
+          ))}
+        </div>
       </div>
     );
   }
 
   if (isSectionDivider) {
     return (
-      <div className="flex min-h-[400px] flex-col rounded-lg border-2 border-quill bg-gradient-to-br from-quill/5 via-amber-soft/40 to-quill/10 p-8">
+      <div className="flex min-h-[400px] flex-col rounded-xl border-2 border-blue-300 bg-gradient-to-br from-blue-50 via-yellow-50/40 to-blue-100/30 p-8 shadow-sm">
         {page.blocks.map((b, i) => (
           <BlockView key={b.id ?? i} block={b} index={i} />
         ))}
@@ -374,9 +380,9 @@ export function PagePreview({ page }: { page: PageContent }) {
   }
 
   return (
-    <div className="rounded-lg border border-border/60 bg-white p-6 shadow-sm">
+    <div className="rounded-xl border border-blue-100 bg-white p-6 shadow-sm">
       {page.title && (
-        <h2 className="mb-3 font-display text-xl font-bold text-quill">{page.title}</h2>
+        <h2 className="mb-3 font-display text-xl font-bold text-blue-950">{page.title}</h2>
       )}
       <div className="space-y-3">
         {page.blocks.map((b, i) => (

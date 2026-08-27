@@ -219,14 +219,22 @@ CRITICAL: Return valid JSON only. No text before or after.`;
 // ---------------------------------------------------------------------------
 
 function buildCoverPrompt(input: GenerateBookInput): string {
-  return `Generate a COVER page for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}.
+  return `Generate a professional COVER page for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}.
 
-The cover should contain:
-- A big heading with the book title (e.g. "${input.subject.name} for ${input.level.fullLabel}")
-- A subtitle "Term ${input.term} • Quill Series"
-- A short one-line description
-- A single large hero image with alt text describing a colourful classroom / Ghanaian children learning / subject-themed illustration
-- A small "Name: ___________  Class: ___________" line at the bottom
+The cover should be visually striking and well-organized, containing these blocks IN ORDER:
+
+1. A "spacer" block (height: 60) at the top for visual breathing room
+2. A "heading" block with the book title — make it catchy and relevant (e.g. "${input.subject.name} Adventures" or "Discovering ${input.subject.name}")
+3. A "subheading" block with the subtitle: "Term ${input.term} • Quill Series"
+4. A "paragraph" block with a short, engaging one-line description (e.g. "A complete ${input.subject.name} textbook for ${input.level.fullLabel}, aligned with the GES curriculum.")
+5. A "spacer" block (height: 40)
+6. A single large "image" block — a hero illustration. Alt text should describe a SPECIFIC, beautiful scene: "A colourful illustration of Ghanaian children in a classroom learning ${input.subject.name}, with books and educational materials, warm sunlight, professional children's book art style"
+7. A "spacer" block (height: 40)
+8. A "paragraph" block with: "Name: _______________    Class: _______________"
+9. A "divider" block
+10. A "paragraph" block with small text: "Quill — Bringing intelligent education to life"
+
+Make the title creative and engaging, not just "${input.subject.name} for ${input.level.fullLabel}".
 
 Return JSON for a PageContent with type: "cover".`;
 }
