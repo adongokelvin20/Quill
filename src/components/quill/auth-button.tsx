@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,8 +19,9 @@ import { toast } from "sonner";
 import { LogIn, LogOut, User as UserIcon, Loader2, Mail, Lock, UserCircle } from "lucide-react";
 
 export function AuthButton() {
-  const { data: session, status } = useSession();
+  const { data: session, status, update } = useSession();
   const [open, setOpen] = useState(false);
+  const router = useRouter();
 
   if (status === "loading") {
     return (
@@ -32,19 +34,21 @@ export function AuthButton() {
   if (session) {
     return (
       <div className="flex items-center gap-2">
-        <div className="hidden items-center gap-2 rounded-lg bg-muted px-3 py-1.5 sm:flex">
-          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-quill text-xs font-bold text-quill-foreground">
+        <div className="hidden items-center gap-2 rounded-lg bg-blue-50 px-3 py-1.5 ring-1 ring-blue-100 sm:flex">
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-blue-900 to-blue-700 text-xs font-bold text-yellow-400">
             {(session.user?.name ?? session.user?.email ?? "U")[0].toUpperCase()}
           </div>
-          <span className="text-xs font-medium text-foreground">
+          <span className="text-xs font-medium text-blue-900">
             {session.user?.name ?? session.user?.email?.split("@")[0]}
           </span>
         </div>
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => signOut({ callbackUrl: "/" })}
-          className="text-muted-foreground hover:text-foreground"
+          onClick={() => {
+            signOut({ callbackUrl: "/" });
+          }}
+          className="text-blue-700 hover:bg-blue-50 hover:text-blue-900"
           title="Sign out"
         >
           <LogOut className="h-4 w-4" />
@@ -57,19 +61,28 @@ export function AuthButton() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" className="bg-quill text-quill-foreground hover:bg-quill/90">
+        <Button size="sm" className="bg-gradient-to-r from-blue-800 to-blue-950 text-white hover:from-blue-700 hover:to-blue-900 shadow-sm">
           <LogIn className="h-4 w-4" />
           <span className="ml-1.5">Sign in</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="font-display text-xl text-quill">Welcome to Quill</DialogTitle>
+          <DialogTitle className="font-display text-xl text-blue-950">Welcome to Quill</DialogTitle>
           <DialogDescription>
             Sign in to save your books and access them from anywhere. New here? Create an account in seconds.
           </DialogDescription>
         </DialogHeader>
-        <AuthTabs onSuccess={() => setOpen(false)} />
+        <AuthTabs
+          onSuccess={async () => {
+            setOpen(false);
+            // Force session refresh
+            await update();
+            // Redirect to library after successful auth
+            toast.success("Redirecting to your library...");
+            setTimeout(() => router.push("/?view=library"), 500);
+          }}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -149,7 +162,7 @@ function SignInForm({ onSuccess }: { onSuccess: () => void }) {
           autoComplete="current-password"
         />
       </div>
-      <Button type="submit" disabled={loading} className="w-full bg-quill text-quill-foreground hover:bg-quill/90">
+      <Button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-blue-800 to-blue-950 text-white hover:from-blue-700 hover:to-blue-900">
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
         <span className="ml-1.5">Sign in</span>
       </Button>
@@ -167,6 +180,7 @@ function SignUpForm({ onSuccess }: { onSuccess: () => void }) {
     e.preventDefault();
     setLoading(true);
     try {
+      // Step 1: Create the account
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -175,23 +189,28 @@ function SignUpForm({ onSuccess }: { onSuccess: () => void }) {
       const data = await res.json();
       if (!res.ok || data.error) {
         toast.error("Sign up failed", { description: data.error ?? "Unknown error" });
+        setLoading(false);
         return;
       }
-      // Auto sign-in after signup
+
+      toast.success("Account created! Signing you in...");
+
+      // Step 2: Sign in with the new credentials
       const signInRes = await signIn("credentials", {
         email,
         password,
         redirect: false,
       });
+
       if (signInRes?.error) {
-        toast.error("Account created but sign-in failed", { description: signInRes.error });
+        toast.error("Account created but sign-in failed", { description: "Please sign in manually." });
+        setLoading(false);
       } else {
-        toast.success("Account created!", { description: `Welcome to Quill, ${name || email}!` });
+        // Success — call onSuccess which closes dialog and redirects
         onSuccess();
       }
     } catch (err) {
       toast.error("Sign up failed", { description: String(err) });
-    } finally {
       setLoading(false);
     }
   };
@@ -240,7 +259,7 @@ function SignUpForm({ onSuccess }: { onSuccess: () => void }) {
           autoComplete="new-password"
         />
       </div>
-      <Button type="submit" disabled={loading} className="w-full bg-quill text-quill-foreground hover:bg-quill/90">
+      <Button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-amber-500 to-amber-600 text-blue-950 hover:from-amber-400 hover:to-amber-500">
         {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserIcon className="h-4 w-4" />}
         <span className="ml-1.5">Create account</span>
       </Button>

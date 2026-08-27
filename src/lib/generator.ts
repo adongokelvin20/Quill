@@ -24,7 +24,7 @@ import { generateHighQualityImage } from "@/lib/images";
 
 // Global modifiers that push the model toward clean, kid-friendly illustrations.
 const GLOBAL_ILLUSTRATION_MODIFIERS =
-  "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, no text, no watermark, no signature";
+  "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, well composed single focal point, neat and organized layout, no text, no watermark, no signature, no border";
 
 export type GenerationMode = "full" | "condensed" | "compact";
 
@@ -174,7 +174,20 @@ Block is a discriminated union — each block has a "type" field plus its data. 
 - tip               { type: "tip", title?: string, text: string }
 - homework          { type: "homework", title: string, instructions: string, items: string[] }
 
-For every image you want on the page, output an "image" block with url: "PLACEHOLDER" and a clear "alt" describing what the illustration should show. The alt text will be used to generate a kid-friendly illustration. For KG/lower-basic, prefer one big image per page. For upper levels, illustrations should be diagrams, charts, or labelled figures.
+For every image you want on the page, output an "image" block with url: "PLACEHOLDER" and a clear, detailed "alt" describing EXACTLY what the illustration should show. The alt text is used to generate the illustration, so be specific and descriptive.
+
+IMAGE ALT TEXT RULES — write alt text that produces clean, organized illustrations:
+- Be specific: "A colourful diagram showing the water cycle with labelled arrows for evaporation, condensation, and precipitation" is better than "water cycle"
+- Single focal point: describe ONE main subject or scene, not multiple unrelated things
+- For diagrams/charts: describe the layout — "a labelled diagram of a plant cell with parts clearly marked: nucleus, cell wall, chloroplast, vacuole"
+- For scenes: describe the setting and action — "a Ghanaian teacher pointing to a blackboard showing the alphabet, with children sitting at desks"
+- For KG/lower-basic: "one big colourful cartoon of [subject], simple shapes, friendly faces"
+- For upper levels: "a clean educational diagram showing [concept], with clear labels and arrows"
+- NEVER ask for text in the image — the model can't render text well. Instead describe the visual elements.
+- Keep alt text under 200 characters for best results.
+
+For KG/lower-basic, prefer ONE big image per page (not multiple small ones).
+For upper levels, use diagrams, charts, or labelled figures where appropriate.
 
 ${modeNote}
 
@@ -473,25 +486,17 @@ async function sanitisePage(page: PageContent, onProgress?: (msg: string) => voi
 
   onProgress?.(`Generating ${imageBlocks.length} illustration${imageBlocks.length > 1 ? "s" : ""} in HD...`);
 
-  // Generate images one at a time with a per-image timeout.
-  // If an image fails, use a Pollinations URL as fallback (renders on-demand
-  // in the browser — no blocking).
+  // Generate images one at a time. Z.ai is the primary source (1024x1024 HD).
+  // Z.ai takes 10-30s per image, so we allow up to 60s per image.
+  // If Z.ai fails after retries, fall back to Pollinations URL (instant, browser loads on-demand).
   const resolvedImages = new Map<string, { url: string; source: "zai-gen" | "pollinations" }>();
 
   for (const block of imageBlocks) {
     const alt = block.alt?.trim() || "children's book illustration";
     try {
-      // Race Z.ai generation vs a 15s timeout — never block more than 15s per image
-      const result = await Promise.race([
-        generateHighQualityImage(alt),
-        new Promise<{ url: string; source: "zai-gen" | "pollinations" }>((resolve) => {
-          // Fallback: Pollinations URL (instant, renders on-demand in browser)
-          const seed = Math.floor(Math.random() * 1_000_000);
-          const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
-          const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
-          setTimeout(() => resolve({ url, source: "pollinations" }), 15000);
-        }),
-      ]);
+      onProgress?.(`Generating illustration: ${alt.slice(0, 50)}...`);
+      // Try Z.ai with full retries (up to 60s total per image)
+      const result = await generateHighQualityImage(alt);
       resolvedImages.set(block.id, result);
     } catch (err) {
       console.error("[quill] Image generation failed for:", alt.slice(0, 50), err);
