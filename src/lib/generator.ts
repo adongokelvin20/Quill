@@ -473,16 +473,26 @@ async function sanitisePage(page: PageContent, onProgress?: (msg: string) => voi
 
   onProgress?.(`Generating ${imageBlocks.length} illustration${imageBlocks.length > 1 ? "s" : ""} in HD...`);
 
-  // Generate images one at a time to avoid Z.ai rate limits (429).
-  // Z.ai generation takes 5-15s per image, so we process them sequentially
-  // with a small delay between requests.
+  // Generate images one at a time with a per-image timeout.
+  // If an image fails, use a Pollinations URL as fallback (renders on-demand
+  // in the browser — no blocking).
   const resolvedImages = new Map<string, { url: string; source: "zai-gen" | "pollinations" }>();
 
   for (const block of imageBlocks) {
     const alt = block.alt?.trim() || "children's book illustration";
     try {
-      const result = await generateHighQualityImage(alt);
-      resolvedImages.set(block.id, { url: result.url, source: result.source });
+      // Race Z.ai generation vs a 15s timeout — never block more than 15s per image
+      const result = await Promise.race([
+        generateHighQualityImage(alt),
+        new Promise<{ url: string; source: "zai-gen" | "pollinations" }>((resolve) => {
+          // Fallback: Pollinations URL (instant, renders on-demand in browser)
+          const seed = Math.floor(Math.random() * 1_000_000);
+          const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
+          const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
+          setTimeout(() => resolve({ url, source: "pollinations" }), 15000);
+        }),
+      ]);
+      resolvedImages.set(block.id, result);
     } catch (err) {
       console.error("[quill] Image generation failed for:", alt.slice(0, 50), err);
       // Last resort: Pollinations URL (instant, renders on-demand)
@@ -490,10 +500,6 @@ async function sanitisePage(page: PageContent, onProgress?: (msg: string) => voi
       const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
       const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
       resolvedImages.set(block.id, { url, source: "pollinations" });
-    }
-    // Small delay between image generations to avoid rate limits
-    if (imageBlocks.length > 1) {
-      await new Promise((r) => setTimeout(r, 500));
     }
   }
 

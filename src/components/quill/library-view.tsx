@@ -192,11 +192,11 @@ export function LibraryView() {
                 {/* Cover */}
                 <button
                   onClick={() => openEditor(book.id)}
-                  className="relative aspect-[3/4] overflow-hidden bg-gradient-to-br from-amber-400/20 via-yellow-50 to-amber-200/30 p-4 text-left"
+                  className="relative aspect-[3/4] overflow-hidden bg-gradient-to-br from-blue-900 via-blue-800 to-blue-950 p-4 text-left"
                 >
                   <div className="flex h-full flex-col">
                     <div className="mb-2 flex items-start justify-between">
-                      <Badge className="bg-white/80 text-amber-800 hover:bg-white/90">
+                      <Badge className="bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30">
                         {li?.label ?? book.level}
                       </Badge>
                       <Badge variant="outline" className="bg-white/60 text-foreground/70">
@@ -204,20 +204,20 @@ export function LibraryView() {
                       </Badge>
                     </div>
                     <div className="mt-auto">
-                      <div className="font-display text-xl font-bold leading-tight text-foreground">
+                      <div className="font-display text-xl font-bold leading-tight text-white">
                         {book.title}
                       </div>
                       {book.subtitle && (
-                        <div className="mt-1 text-xs text-foreground/70">{book.subtitle}</div>
+                        <div className="mt-1 text-xs text-yellow-200/80">{book.subtitle}</div>
                       )}
-                      <div className="mt-2 text-[10px] text-foreground/60">
+                      <div className="mt-2 text-[10px] text-blue-200/60">
                         Quill • Bringing intelligent education to life
                       </div>
                     </div>
                   </div>
                   {/* Hover overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center bg-amber-600/80 opacity-0 transition-opacity group-hover:opacity-100">
-                    <span className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-quill shadow-lg">
+                  <div className="absolute inset-0 flex items-center justify-center bg-blue-600/90 opacity-0 transition-opacity group-hover:opacity-100">
+                    <span className="inline-flex items-center gap-2 rounded-lg bg-yellow-500 px-4 py-2 text-sm font-medium text-blue-950 shadow-lg">
                       <Edit3 className="h-4 w-4" />
                       Open editor
                     </span>
