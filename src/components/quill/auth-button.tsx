@@ -76,9 +76,7 @@ export function AuthButton() {
         <AuthTabs
           onSuccess={async () => {
             setOpen(false);
-            // Force session refresh
             await update();
-            // Redirect to library after successful auth
             toast.success("Redirecting to your library...");
             setTimeout(() => router.push("/?view=library"), 500);
           }}
@@ -114,20 +112,20 @@ function SignInForm({ onSuccess }: { onSuccess: () => void }) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await signIn("credentials", {
+      const result = await signIn("credentials", {
         email,
         password,
         redirect: false,
       });
-      if (res?.error) {
-        toast.error("Sign in failed", { description: res.error });
+      if (result?.error) {
+        toast.error("Sign in failed", { description: result.error });
+        setLoading(false);
       } else {
         toast.success("Welcome back!", { description: email });
         onSuccess();
       }
     } catch (err) {
       toast.error("Sign in failed", { description: String(err) });
-    } finally {
       setLoading(false);
     }
   };
@@ -170,6 +168,15 @@ function SignInForm({ onSuccess }: { onSuccess: () => void }) {
   );
 }
 
+// Safe JSON parse — handles non-JSON responses (HTML error pages) gracefully
+async function safeJson(res: Response): Promise<Record<string, unknown>> {
+  try {
+    return await res.json();
+  } catch {
+    return { error: `Server returned status ${res.status}. Please try again.` };
+  }
+}
+
 function SignUpForm({ onSuccess }: { onSuccess: () => void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -186,9 +193,12 @@ function SignUpForm({ onSuccess }: { onSuccess: () => void }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, name }),
       });
-      const data = await res.json();
+
+      // Use safe JSON parsing to avoid "SyntaxError: Unexpected token" if response isn't JSON
+      const data = await safeJson(res);
+
       if (!res.ok || data.error) {
-        toast.error("Sign up failed", { description: data.error ?? "Unknown error" });
+        toast.error("Sign up failed", { description: (data.error as string) ?? "Unknown error" });
         setLoading(false);
         return;
       }
@@ -196,17 +206,16 @@ function SignUpForm({ onSuccess }: { onSuccess: () => void }) {
       toast.success("Account created! Signing you in...");
 
       // Step 2: Sign in with the new credentials
-      const signInRes = await signIn("credentials", {
+      const signInResult = await signIn("credentials", {
         email,
         password,
         redirect: false,
       });
 
-      if (signInRes?.error) {
+      if (signInResult?.error) {
         toast.error("Account created but sign-in failed", { description: "Please sign in manually." });
         setLoading(false);
       } else {
-        // Success — call onSuccess which closes dialog and redirects
         onSuccess();
       }
     } catch (err) {

@@ -663,37 +663,56 @@ export function GeneratorView() {
 
           {/* Generation progress */}
           {generating && (
-            <Card className="border-quill/30">
+            <Card className="border-blue-300 shadow-lg">
               <CardContent className="space-y-4 p-5">
                 <div className="flex items-center gap-3">
-                  <Loader2 className="h-5 w-5 animate-spin text-quill" />
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-700" />
                   <div className="flex-1">
-                    <div className="font-medium text-foreground">{progress.message || "Working..."}</div>
+                    <div className="font-medium text-blue-950">{progress.message || "Working..."}</div>
                     {bookMeta && (
-                      <div className="text-xs text-muted-foreground">
+                      <div className="text-xs text-blue-600">
                         {bookMeta.title} — {bookMeta.subtitle}
                       </div>
                     )}
                   </div>
                 </div>
 
+                {/* Progress bar */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-blue-900">
+                      {generatedPages.length} of {plan.totalPages} pages
+                    </span>
+                    <span className="text-blue-600">
+                      {Math.round((generatedPages.length / Math.max(plan.totalPages, 1)) * 100)}%
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-blue-100">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-blue-600 to-blue-800 transition-all duration-500 ease-out"
+                      style={{
+                        width: `${Math.min((generatedPages.length / Math.max(plan.totalPages, 1)) * 100, 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
                 {generatedPages.length > 0 && (
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{generatedPages.length} pages generated</span>
-                      {progress.totalPages && <span>{progress.totalPages} expected</span>}
+                    <div className="flex items-center justify-between text-xs text-blue-600">
+                      <span className="font-medium">Pages generated</span>
                     </div>
-                    <div className="grid gap-1.5 sm:grid-cols-2">
+                    <div className="grid gap-1.5 sm:grid-cols-2 max-h-48 overflow-y-auto scrollbar-thin">
                       {generatedPages.map((p) => (
                         <div
                           key={p.pageIndex}
-                          className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1.5 text-xs"
+                          className="flex items-center gap-2 rounded-md border border-blue-100 bg-blue-50/50 px-2 py-1.5 text-xs"
                         >
-                          <Check className="h-3 w-3 text-emerald-600" />
-                          <span className="flex-1 truncate text-muted-foreground">
+                          <Check className="h-3 w-3 flex-shrink-0 text-emerald-600" />
+                          <span className="flex-1 truncate text-blue-800">
                             Page {p.pageIndex + 1}: {p.pageTitle}
                           </span>
-                          <Badge variant="outline" className="text-[9px]">
+                          <Badge variant="outline" className="text-[9px] border-blue-200 text-blue-600">
                             {p.pageType}
                           </Badge>
                         </div>

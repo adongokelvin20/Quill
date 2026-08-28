@@ -77,11 +77,15 @@ export const authOptions: NextAuthOptions = {
 
 // Helper used by API routes to get the current user id (or null for anonymous)
 export async function getCurrentUserId(req?: Request): Promise<string | null> {
-  // For Next.js App Router API routes, we use getToken from next-auth/jwt
-  const { getToken } = await import("next-auth/jwt");
-  const token = await getToken({
-    req,
-    secret: process.env.NEXTAUTH_SECRET ?? "quill-dev-secret-change-in-production",
-  });
-  return (token?.id as string | undefined) ?? null;
+  try {
+    const { getToken } = await import("next-auth/jwt");
+    const token = await getToken({
+      req,
+      secret: process.env.NEXTAUTH_SECRET ?? "quill-dev-secret-change-in-production",
+    });
+    return (token?.id as string | undefined) ?? null;
+  } catch (err) {
+    console.error("[quill] getCurrentUserId error:", err);
+    return null;
+  }
 }
