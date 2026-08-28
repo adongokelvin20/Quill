@@ -2,6 +2,7 @@
 
 import { useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { useQuillStore } from "@/lib/store";
 import { QuillHeader } from "@/components/quill/header";
 import { QuillFooter } from "@/components/quill/footer";
@@ -27,6 +28,15 @@ function LibraryRedirect() {
 
 export default function Home() {
   const view = useQuillStore((s) => s.view);
+  const goLibrary = useQuillStore((s) => s.goLibrary);
+  const { data: session, status } = useSession();
+
+  // If user is signed in and on the home view, redirect to their library
+  useEffect(() => {
+    if (status === "authenticated" && view === "home") {
+      goLibrary();
+    }
+  }, [status, view, goLibrary]);
 
   return (
     <div className="flex min-h-screen flex-col">
