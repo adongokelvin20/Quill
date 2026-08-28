@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuillStore } from "@/lib/store";
 import { QuillHeader } from "@/components/quill/header";
@@ -10,12 +10,11 @@ import { GeneratorView } from "@/components/quill/generator-view";
 import { LibraryView } from "@/components/quill/library-view";
 import { EditorView } from "@/components/quill/editor-view";
 
-export default function Home() {
-  const view = useQuillStore((s) => s.view);
+// Separate component that uses useSearchParams — must be wrapped in Suspense
+function LibraryRedirect() {
   const goLibrary = useQuillStore((s) => s.goLibrary);
   const searchParams = useSearchParams();
 
-  // Handle ?view=library redirect after auth
   useEffect(() => {
     const viewParam = searchParams.get("view");
     if (viewParam === "library") {
@@ -23,8 +22,17 @@ export default function Home() {
     }
   }, [searchParams, goLibrary]);
 
+  return null;
+}
+
+export default function Home() {
+  const view = useQuillStore((s) => s.view);
+
   return (
     <div className="flex min-h-screen flex-col">
+      <Suspense fallback={null}>
+        <LibraryRedirect />
+      </Suspense>
       <QuillHeader />
       <main className="flex-1">
         {view === "home" && <HomeView />}
