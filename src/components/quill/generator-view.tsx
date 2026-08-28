@@ -174,112 +174,107 @@ export function GeneratorView() {
     setBookId(null);
     setBookMeta(null);
 
+    let currentBookId: string | null = null;
+    let attempt = 0;
+    const maxAttempts = 10; // Max resume attempts (10 × 50s = ~8 min total)
+
     try {
-      // Step 1: Start generation (synchronous — waits for completion or timeout)
-      const res = await fetch("/api/quill/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          level,
-          subject,
-          term,
-          topics: allTopics,
-          lessons: 1,
-          research: false,
-          useSections: false,
-        }),
-      });
+      // Loop: generate → check status → resume if needed
+      while (attempt < maxAttempts) {
+        attempt++;
 
-      if (!res.ok) {
-        let errorMsg = `HTTP ${res.status}`;
-        try {
-          const errData = await res.json();
-          if (errData.error) errorMsg = errData.error;
-        } catch {}
-        throw new Error(errorMsg);
-      }
+        // Step 1: Call generate (new or resume)
+        const res = await fetch("/api/quill/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            currentBookId
+              ? { bookId: currentBookId } // Resume
+              : { // New
+                  level,
+                  subject,
+                  term,
+                  topics: allTopics,
+                  lessons: 1,
+                  research: false,
+                  useSections: false,
+                }
+          ),
+        });
 
-      const data = await res.json();
-      const localBookId = data.bookId as string;
-      if (!localBookId) throw new Error("No book ID returned");
+        if (!res.ok) {
+          let errorMsg = `HTTP ${res.status}`;
+          try {
+            const errData = await res.json();
+            if (errData.error) errorMsg = errData.error;
+          } catch {}
+          throw new Error(errorMsg);
+        }
 
-      setBookId(localBookId);
+        const data = await res.json();
+        currentBookId = data.bookId;
+        setBookId(currentBookId);
 
-      // If generation completed successfully
-      if (data.status === "ready" && data.pages > 0) {
-        setBookMeta({ title: data.title, subtitle: "", description: "" });
-        setProgress({ message: `Book ready! ${data.pages} pages generated.`, totalPages: data.pages });
-        // Add placeholder pages
+        if (data.title) {
+          setBookMeta({ title: data.title, subtitle: "", description: "" });
+        }
+
+        // Update progress
+        const pageCount = data.pages || 0;
+        setProgress({ message: `Generated ${pageCount} pages...`, totalPages: pageCount });
+        // Update page list
         const pages = [];
-        for (let i = 0; i < data.pages; i++) {
+        for (let i = 0; i < pageCount; i++) {
           pages.push({ pageIndex: i, pageType: "generated", pageTitle: `Page ${i + 1}` });
         }
         setGeneratedPages(pages);
-        toast.success("Book generated!", { description: `${data.pages} pages created. Opening editor...` });
-        setTimeout(() => openEditor(localBookId), 1500);
-        return;
-      }
 
-      // If generation failed
-      if (data.status === "error") {
-        throw new Error(data.error || "Generation failed");
-      }
-
-      // If still generating (timeout occurred but book was created)
-      // Start polling for status
-      setProgress({ message: "Generation in progress...", totalPages: 7 });
-      let pollCount = 0;
-      const maxPolls = 60; // Poll for up to 3 minutes (60 × 3s)
-
-      const pollInterval = setInterval(async () => {
-        pollCount++;
-        if (pollCount > maxPolls) {
-          clearInterval(pollInterval);
-          setGenerating(false);
-          toast.error("Generation timed out. Please try again.");
+        // Check if done
+        if (data.done || data.status === "ready") {
+          if (pageCount > 0) {
+            setProgress({ message: `Book ready! ${pageCount} pages generated.`, totalPages: pageCount });
+            toast.success("Book generated!", { description: `${pageCount} pages created. Opening editor...` });
+            setTimeout(() => openEditor(currentBookId!), 1500);
+          } else {
+            throw new Error("Generation produced no pages.");
+          }
           return;
         }
 
-        try {
-          const statusRes = await fetch(`/api/quill/generate?bookId=${localBookId}`);
-          const status = await statusRes.json();
-
-          if (status.pages > 0) {
-            setProgress({ message: `Generated ${status.pages} pages...`, totalPages: status.pages });
-            // Update page list
-            const pages = [];
-            for (let i = 0; i < status.pages; i++) {
-              pages.push({ pageIndex: i, pageType: "generated", pageTitle: `Page ${i + 1}` });
-            }
-            setGeneratedPages(pages);
-          }
-
-          if (status.done) {
-            clearInterval(pollInterval);
-            setGenerating(false);
-
-            if (status.status === "ready" && status.pages > 0) {
-              setBookMeta({ title: status.title, subtitle: "", description: "" });
-              setProgress({ message: `Book ready! ${status.pages} pages generated.`, totalPages: status.pages });
-              toast.success("Book generated!", { description: `${status.pages} pages created. Opening editor...` });
-              setTimeout(() => openEditor(localBookId), 1500);
-            } else if (status.status === "error") {
-              toast.error("Generation failed", { description: "Please try again." });
-              setProgress({ message: "Generation failed. Please try again." });
-            }
-          }
-        } catch (pollErr) {
-          console.error("Poll error:", pollErr);
+        if (data.error) {
+          throw new Error(data.error);
         }
-      }, 3000);
 
+        // If not done and resume is needed, wait 2 seconds and loop again
+        if (data.resume || data.status === "generating") {
+          setProgress({ message: `Generated ${pageCount} pages. Continuing... (attempt ${attempt})` });
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+
+        // Unknown state — break
+        break;
+      }
+
+      if (attempt >= maxAttempts) {
+        // Check final status
+        if (currentBookId) {
+          const statusRes = await fetch(`/api/quill/generate?bookId=${currentBookId}`);
+          const status = await statusRes.json();
+          if (status.pages > 0) {
+            toast.success("Book generated!", { description: `${status.pages} pages created. Opening editor...` });
+            setTimeout(() => openEditor(currentBookId!), 1500);
+            return;
+          }
+        }
+        throw new Error("Generation timed out after multiple attempts. Please try again.");
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       toast.error("Generation failed", { description: message });
       setProgress({ message: `Error: ${message}` });
     } finally {
-      // Don't set generating to false here if polling
-      // It will be set in the poll interval
+      setGenerating(false);
     }
   };
 

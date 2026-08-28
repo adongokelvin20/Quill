@@ -632,8 +632,9 @@ export async function generateBookMeta(input: GenerateBookInput): Promise<{
 
 export async function* generateBook(
   input: GenerateBookInput,
-  opts: { research?: boolean; signal?: AbortSignal } = {}
+  opts: { research?: boolean; signal?: AbortSignal; skipPages?: number } = {}
 ): AsyncGenerator<GenerateBookProgress> {
+  const skipPages = opts.skipPages ?? 0;
   // Compute condensing plan
   const plan = input.targetPages
     ? planCondensing(input.targetPages, input.topics)
@@ -666,9 +667,11 @@ export async function* generateBook(
     }
   };
 
-  // 1. Book meta
-  const meta = await generateBookMeta(input);
-  yield { type: "book-meta", book: meta };
+  // 1. Book meta — skip if resuming (already have it in DB)
+  if (skipPages === 0) {
+    const meta = await generateBookMeta(input);
+    yield { type: "book-meta", book: meta };
+  }
 
   let pageIndex = 0;
 
@@ -681,18 +684,25 @@ export async function* generateBook(
     return generatePageJson(systemPrompt, userPrompt, input.level, onProgress);
   };
 
+  // Helper: only generate if this page hasn't been generated yet (resume support)
+  const shouldGen = () => pageIndex >= skipPages;
+
   // 2. Cover
-  yield { type: "page-start", pageIndex, pageType: "cover", pageTitle: "Cover" };
-  const cover = await genPage("cover", "Cover", buildCoverPrompt(input));
-  yield* flushLog();
-  yield { type: "page-done", pageIndex, pageType: "cover", pageTitle: "Cover", page: cover };
+  if (shouldGen()) {
+    yield { type: "page-start", pageIndex, pageType: "cover", pageTitle: "Cover" };
+    const cover = await genPage("cover", "Cover", buildCoverPrompt(input));
+    yield* flushLog();
+    yield { type: "page-done", pageIndex, pageType: "cover", pageTitle: "Cover", page: cover };
+  }
   pageIndex++;
 
   // 3. TOC
-  yield { type: "page-start", pageIndex, pageType: "toc", pageTitle: "Table of Contents" };
-  const toc = await genPage("toc", "Table of Contents", buildTocPrompt(input, plan));
-  yield* flushLog();
-  yield { type: "page-done", pageIndex, pageType: "toc", pageTitle: "Table of Contents", page: toc };
+  if (shouldGen()) {
+    yield { type: "page-start", pageIndex, pageType: "toc", pageTitle: "Table of Contents" };
+    const toc = await genPage("toc", "Table of Contents", buildTocPrompt(input, plan));
+    yield* flushLog();
+    yield { type: "page-done", pageIndex, pageType: "toc", pageTitle: "Table of Contents", page: toc };
+  }
   pageIndex++;
 
   // 4. Lessons — grouped into sections if useSections is true
@@ -712,69 +722,69 @@ export async function* generateBook(
       const sectionStart = i;
       const sectionEnd = Math.min(i + sectionSize, topics.length);
       const lessonsInSection = topics.slice(sectionStart, sectionEnd);
-      // Build a section title from the first few lesson topics
       const sectionTitle = lessonsInSection.length === 1
         ? lessonsInSection[0]
         : `${lessonsInSection[0]} & Related Topics`;
       const dividerTitle = `Section ${sectionNum}: ${sectionTitle}`;
-      yield { type: "page-start", pageIndex, pageType: "section-divider", pageTitle: dividerTitle };
-      const divider = await genPage("section-divider", dividerTitle, buildSectionDividerPrompt(input, sectionNum, sectionTitle, lessonsInSection));
-      yield* flushLog();
-      yield { type: "page-done", pageIndex, pageType: "section-divider", pageTitle: dividerTitle, page: divider };
+      if (shouldGen()) {
+        yield { type: "page-start", pageIndex, pageType: "section-divider", pageTitle: dividerTitle };
+        const divider = await genPage("section-divider", dividerTitle, buildSectionDividerPrompt(input, sectionNum, sectionTitle, lessonsInSection));
+        yield* flushLog();
+        yield { type: "page-done", pageIndex, pageType: "section-divider", pageTitle: dividerTitle, page: divider };
+      }
       pageIndex++;
     }
 
-    // Research (optional) — passes authoritative content to the LLM
-    let research = "";
-    if (opts.research) {
-      yield { type: "log", pageIndex, message: `Researching "${topic}"...` };
-      try {
-        research = await researchTopic(topic, input.level.id);
-      } catch {
-        research = "";
-      }
-    }
-
     // Lesson page
-    yield { type: "page-start", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}` };
-    const lesson = await genPage("lesson", `Lesson ${lessonNum}: ${topic}`, buildLessonPrompt(input, topic, lessonNum, research, plan.mode));
-    yield* flushLog();
-    yield { type: "page-done", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}`, page: lesson };
+    if (shouldGen()) {
+      yield { type: "page-start", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}` };
+      const lesson = await genPage("lesson", `Lesson ${lessonNum}: ${topic}`, buildLessonPrompt(input, topic, lessonNum, "", plan.mode));
+      yield* flushLog();
+      yield { type: "page-done", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}`, page: lesson };
+    }
     pageIndex++;
 
-    // Skip exercise/homework in compact mode (lesson already has embedded exercise)
+    // Skip exercise/homework in compact mode
     if (plan.mode === "compact") continue;
 
-    // Exercise page (or combined exercise+homework in condensed mode)
+    // Exercise page
     const exTitle = plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}`;
-    yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: exTitle };
-    const exercise = await genPage("exercise", exTitle, buildExercisePrompt(input, topic, lessonNum, plan.mode));
-    yield* flushLog();
-    yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: exTitle, page: exercise };
+    if (shouldGen()) {
+      yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: exTitle };
+      const exercise = await genPage("exercise", exTitle, buildExercisePrompt(input, topic, lessonNum, plan.mode));
+      yield* flushLog();
+      yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: exTitle, page: exercise };
+    }
     pageIndex++;
 
     // Homework page — only in full mode
     if (plan.mode === "full") {
-      yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
-      const hw = await genPage("homework", `Homework ${lessonNum}`, buildHomeworkPrompt(input, topic, lessonNum));
-      yield* flushLog();
-      yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
+      if (shouldGen()) {
+        yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
+        const hw = await genPage("homework", `Homework ${lessonNum}`, buildHomeworkPrompt(input, topic, lessonNum));
+        yield* flushLog();
+        yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
+      }
       pageIndex++;
     }
   }
 
   // 5. Glossary
-  yield { type: "page-start", pageIndex, pageType: "glossary", pageTitle: "Glossary" };
-  const glossary = await genPage("glossary", "Glossary", `Generate a GLOSSARY page for the ${input.subject.name} book. List 10-15 key terms covered across the lessons, each with a one-sentence meaning appropriate for ${input.level.fullLabel}. Use a "vocabulary" block. Return JSON for a PageContent with type: "glossary".`);
-  yield* flushLog();
-  yield { type: "page-done", pageIndex, pageType: "glossary", pageTitle: "Glossary", page: glossary };
+  if (shouldGen()) {
+    yield { type: "page-start", pageIndex, pageType: "glossary", pageTitle: "Glossary" };
+    const glossary = await genPage("glossary", "Glossary", `Generate a GLOSSARY page for the ${input.subject.name} book. List 10-15 key terms covered across the lessons, each with a one-sentence meaning appropriate for ${input.level.fullLabel}. Use a "vocabulary" block. Return JSON for a PageContent with type: "glossary".`);
+    yield* flushLog();
+    yield { type: "page-done", pageIndex, pageType: "glossary", pageTitle: "Glossary", page: glossary };
+  }
   pageIndex++;
 
   // 6. Closing
-  yield { type: "page-start", pageIndex, pageType: "closing", pageTitle: "Well Done!" };
-  const closing = await genPage("closing", "Well Done!", buildClosingPrompt(input));
-  yield* flushLog();
-  yield { type: "page-done", pageIndex, pageType: "closing", pageTitle: "Well Done!", page: closing };
+  if (shouldGen()) {
+    yield { type: "page-start", pageIndex, pageType: "closing", pageTitle: "Well Done!" };
+    const closing = await genPage("closing", "Well Done!", buildClosingPrompt(input));
+    yield* flushLog();
+    yield { type: "page-done", pageIndex, pageType: "closing", pageTitle: "Well Done!", page: closing };
+  }
   pageIndex++;
 
   yield { type: "complete", message: `Generated ${pageIndex} pages (${plan.mode} mode).` };
