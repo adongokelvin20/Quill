@@ -25,5 +25,5 @@
       "maxDuration": 30
     }
   },
-  "buildCommand": "node scripts/setup-db.mjs && prisma generate && next build"
+  "buildCommand": "prisma generate && prisma db push && next build"
 }

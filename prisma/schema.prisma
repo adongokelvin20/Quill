@@ -1,20 +1,155 @@
 // Quill — Bringing intelligent education to life.
-// Prisma schema.
-//
-// This schema works with BOTH SQLite (local dev) and PostgreSQL (Vercel).
-// The provider is set automatically by the `scripts/setup-db.mjs` script
-// based on the DATABASE_URL format:
-//   - If DATABASE_URL starts with "file:" → SQLite (local dev)
-//   - If DATABASE_URL starts with "postgres:" → PostgreSQL (Vercel)
-//
-// For Vercel deployment, the build command in vercel.json runs the setup script
-// which sets the correct provider before prisma generate.
+// Prisma schema — configured for PostgreSQL (Vercel production).
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users & authentication (NextAuth v4)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String?
+  passwordHash String?
+  image        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  accounts     Account[]
+  sessions     Session[]
+  books        Book[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ---------------------------------------------------------------------------
+// Books & pages
+// ---------------------------------------------------------------------------
+
+model Book {
+  id           String   @id @default(cuid())
+  title        String
+  subtitle     String?
+  description  String?
+
+  level        String
+  subject      String
+  term         Int
+  language     String   @default("english")
+
+  coverColor   String   @default("#0f766e")
+  accentColor  String   @default("#f59e0b")
+
+  status       String   @default("draft")
+  topics       String?
+  targetPages  Int?
+
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  pages        Page[]
+  exports      BookExport[]
+
+  @@index([userId])
+}
+
+model Page {
+  id           String   @id @default(cuid())
+  bookId       String
+  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pageNumber   Int
+  type         String   @default("lesson")
+  title        String?
+  content      String
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([bookId, pageNumber])
+}
+
+model BookExport {
+  id           String   @id @default(cuid())
+  bookId       String
+  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  format       String
+  filePath     String
+  fileSize     Int      @default(0)
+  createdAt    DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Asset library (image search / generation results, cached)
+// ---------------------------------------------------------------------------
+
+model Asset {
+  id           String   @id @default(cuid())
+  source       String
+  prompt       String
+  url          String
+  width        Int?
+  height       Int?
+  alt          String?
+  tags         String?
+  createdAt    DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Scraped web content cache
+// ---------------------------------------------------------------------------
+
+model ScrapedPage {
+  id           String   @id @default(cuid())
+  url          String   @unique
+  title        String?
+  content      String
+  fetchedAt    DateTime @default(now())
 }
