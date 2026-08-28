@@ -1,6 +1,10 @@
-// Quill — Book generation API (synchronous, streaming).
-// Generates the book in a single request and streams progress via SSE.
-// Uses maxDuration=300 (5 min) on Vercel Pro, or 60s on Hobby.
+// Quill — Book generation API.
+// Two-step approach that works on Vercel serverless:
+//   POST /api/quill/generate — starts generation, returns bookId immediately
+//   GET /api/quill/generate?bookId=xxx — returns progress from database
+//
+// Generation runs synchronously in the POST request. If it times out,
+// the client can continue polling GET for status (which reads from DB).
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
@@ -9,7 +13,7 @@ import { LEVELS, SUBJECTS, getLevel } from "@/lib/curriculum";
 import { getCurrentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 300; // 5 min on Pro, 60s on Hobby
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
@@ -43,22 +47,23 @@ export async function POST(req: NextRequest) {
       ? body.topics
       : subject.topics[term].slice(0, 3);
 
-    // Limit to 2 topics max to ensure generation completes within timeout
-    const limitedTopics = topics.slice(0, 2);
+    // Limit to 1 topic for fastest generation
+    const limitedTopics = topics.slice(0, 1);
 
     const input: GenerateBookInput = {
       level: levelInfo,
       subject,
       term,
       topics: limitedTopics,
-      lessons: body.lessons ?? Math.min(2, limitedTopics.length),
+      lessons: 1,
       language: body.language ?? "english",
       targetPages: body.targetPages,
-      useSections: false, // Always disable sections to save time
+      useSections: false,
     };
 
     const userId = await getCurrentUserId(req);
 
+    // Create the book record
     let book;
     try {
       book = await db.book.create({
@@ -84,99 +89,107 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Stream the generation — this keeps the connection alive
-    let streamClosed = false;
-    const stream = new ReadableStream({
-      async start(controller) {
-        const encoder = new TextEncoder();
-        const send = (event: string, data: unknown) => {
-          if (streamClosed) return;
+    // Generate synchronously — if this times out, the client polls GET for status
+    try {
+      for await (const ev of generateBook(input, { research: false })) {
+        if (ev.type === "book-meta") {
           try {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            await db.book.update({
+              where: { id: book.id },
+              data: {
+                title: ev.book!.title,
+                subtitle: ev.book!.subtitle,
+                description: ev.book!.description,
+              },
+            });
           } catch (e) {
-            console.error("[quill] stream enqueue error:", e);
+            console.error("[quill] book update error:", e);
           }
-        };
-
-        send("book-created", { bookId: book.id, level: levelInfo.id, subject: subject.id, term });
-
-        try {
-          for await (const ev of generateBook(input, { research: false })) { // Always disable research for speed
-            if (ev.type === "book-meta") {
-              try {
-                await db.book.update({
-                  where: { id: book.id },
-                  data: {
-                    title: ev.book!.title,
-                    subtitle: ev.book!.subtitle,
-                    description: ev.book!.description,
-                  },
-                });
-              } catch (e) {
-                console.error("[quill] book update error:", e);
-              }
-              send("book-meta", { bookId: book.id, ...ev.book! });
-            } else if (ev.type === "page-start") {
-              send("page-start", { pageIndex: ev.pageIndex, pageType: ev.pageType, pageTitle: ev.pageTitle });
-            } else if (ev.type === "page-done" && ev.page) {
-              try {
-                await db.page.create({
-                  data: {
-                    bookId: book.id,
-                    pageNumber: ev.pageIndex!,
-                    type: ev.pageType!,
-                    title: ev.pageTitle ?? null,
-                    content: JSON.stringify(ev.page),
-                  },
-                });
-              } catch (e) {
-                console.error("[quill] page create error:", e);
-              }
-              send("page-done", { pageIndex: ev.pageIndex, pageType: ev.pageType, pageTitle: ev.pageTitle, page: ev.page });
-            } else if (ev.type === "log") {
-              send("log", { message: ev.message });
-            } else if (ev.type === "complete") {
-              try {
-                await db.book.update({ where: { id: book.id }, data: { status: "ready" } });
-              } catch (e) {
-                console.error("[quill] book status update error:", e);
-              }
-              send("complete", { bookId: book.id, message: ev.message });
-            }
-          }
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error("[quill] generation error:", message);
+        } else if (ev.type === "page-done" && ev.page) {
           try {
-            await db.book.update({ where: { id: book.id }, data: { status: "error" } });
-          } catch {
-            // ignore
+            await db.page.create({
+              data: {
+                bookId: book.id,
+                pageNumber: ev.pageIndex!,
+                type: ev.pageType!,
+                title: ev.pageTitle ?? null,
+                content: JSON.stringify(ev.page),
+              },
+            });
+          } catch (e) {
+            console.error("[quill] page create error:", e);
           }
-          send("error", { bookId: book.id, message });
-        } finally {
-          streamClosed = true;
-          try { controller.close(); } catch {}
+        } else if (ev.type === "complete") {
+          try {
+            await db.book.update({ where: { id: book.id }, data: { status: "ready" } });
+          } catch (e) {
+            console.error("[quill] book status update error:", e);
+          }
         }
-      },
-    });
+      }
 
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  } catch (err: unknown) {
+      // Generation complete — return success
+      const finalBook = await db.book.findUnique({
+        where: { id: book.id },
+        include: { _count: { select: { pages: true } } },
+      });
+      return NextResponse.json({
+        bookId: book.id,
+        status: "ready",
+        pages: finalBook?._count.pages ?? 0,
+        title: finalBook?.title,
+      });
+    } catch (genErr) {
+      const message = genErr instanceof Error ? genErr.message : String(genErr);
+      console.error("[quill] generation error:", message);
+      try {
+        await db.book.update({ where: { id: book.id }, data: { status: "error" } });
+      } catch {}
+      // Don't return error — return bookId so client can check status
+      return NextResponse.json({
+        bookId: book.id,
+        status: "error",
+        error: message,
+      });
+    }
+  } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[quill] generate API error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-// GET — list levels + subjects
-export async function GET() {
+// GET — return progress by reading from database
+export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  const bookId = url.searchParams.get("bookId");
+
+  if (bookId) {
+    try {
+      const book = await db.book.findUnique({
+        where: { id: bookId },
+        include: { _count: { select: { pages: true } } },
+      });
+
+      if (!book) {
+        return NextResponse.json({ error: "Book not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        bookId,
+        status: book.status, // "generating" | "ready" | "error"
+        pages: book._count.pages,
+        title: book.title,
+        done: book.status === "ready" || book.status === "error",
+        error: book.status === "error" ? "Generation failed" : null,
+      });
+    } catch (e) {
+      console.error("[quill] status check error:", e);
+      return NextResponse.json({ error: "Database error" }, { status: 500 });
+    }
+  }
+
+  // Return curriculum data
   return NextResponse.json({
     levels: LEVELS,
     subjects: SUBJECTS.map((s) => ({

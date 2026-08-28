@@ -174,11 +174,8 @@ export function GeneratorView() {
     setBookId(null);
     setBookMeta(null);
 
-    let localBookId: string | null = null;
-    let localPageCount = 0;
-    let hadError = false;
-
     try {
+      // Step 1: Start generation (synchronous — waits for completion or timeout)
       const res = await fetch("/api/quill/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -187,106 +184,106 @@ export function GeneratorView() {
           subject,
           term,
           topics: allTopics,
-          lessons,
-          research: false, // Always disable research for speed
-          targetPages: useTargetPages ? targetPages : undefined,
-          useSections: false, // Always disable sections for speed
+          lessons: 1,
+          research: false,
+          useSections: false,
         }),
       });
 
-      // Check if the response is an error JSON (not SSE stream)
-      const contentType = res.headers.get("content-type") || "";
-      if (!res.ok || contentType.includes("application/json")) {
+      if (!res.ok) {
         let errorMsg = `HTTP ${res.status}`;
         try {
           const errData = await res.json();
           if (errData.error) errorMsg = errData.error;
-        } catch {
-          // Response wasn't JSON
-        }
+        } catch {}
         throw new Error(errorMsg);
       }
-      if (!res.body) throw new Error("No response body");
 
-      // Read the SSE stream
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+      const data = await res.json();
+      const localBookId = data.bookId as string;
+      if (!localBookId) throw new Error("No book ID returned");
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      setBookId(localBookId);
 
-        // Split on double newline (SSE event delimiter)
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-
-        for (const evt of events) {
-          const lines = evt.split("\n");
-          let eventType = "";
-          let dataStr = "";
-          for (const line of lines) {
-            if (line.startsWith("event:")) {
-              eventType = line.slice(6).trim();
-            } else if (line.startsWith("data:")) {
-              dataStr = line.slice(5).trim();
-            }
-          }
-          if (!eventType || !dataStr) continue;
-
-          try {
-            const data = JSON.parse(dataStr);
-            if (eventType === "book-created") localBookId = data.bookId as string;
-            if (eventType === "page-done") localPageCount++;
-            if (eventType === "error") hadError = true;
-
-            // Handle events
-            if (eventType === "book-created") {
-              setBookId(data.bookId as string);
-              setProgress({ message: "Creating book..." });
-            } else if (eventType === "book-meta") {
-              setBookMeta({ title: data.title, subtitle: data.subtitle, description: data.description });
-              setProgress({ message: `Generating: ${data.title}` });
-            } else if (eventType === "page-start") {
-              setProgress({ message: `Generating page ${(data.pageIndex ?? 0) + 1}: ${data.pageTitle ?? ""}`, pageIndex: data.pageIndex });
-            } else if (eventType === "page-done") {
-              setGeneratedPages((prev) => [...prev, { pageIndex: data.pageIndex, pageType: data.pageType, pageTitle: data.pageTitle }]);
-            } else if (eventType === "log") {
-              setProgress({ message: data.message });
-            } else if (eventType === "complete") {
-              setProgress({ message: "Complete!" });
-            } else if (eventType === "error") {
-              toast.error("Generation error", { description: data.message });
-            }
-          } catch (parseErr) {
-            console.error("SSE parse error:", parseErr, "data:", dataStr);
-          }
+      // If generation completed successfully
+      if (data.status === "ready" && data.pages > 0) {
+        setBookMeta({ title: data.title, subtitle: "", description: "" });
+        setProgress({ message: `Book ready! ${data.pages} pages generated.`, totalPages: data.pages });
+        // Add placeholder pages
+        const pages = [];
+        for (let i = 0; i < data.pages; i++) {
+          pages.push({ pageIndex: i, pageType: "generated", pageTitle: `Page ${i + 1}` });
         }
+        setGeneratedPages(pages);
+        toast.success("Book generated!", { description: `${data.pages} pages created. Opening editor...` });
+        setTimeout(() => openEditor(localBookId), 1500);
+        return;
       }
 
-      if (hadError) {
-        throw new Error("Generation encountered an error. Please try again.");
-      }
-      if (localPageCount === 0) {
-        throw new Error("Generation produced no pages. Please try again.");
+      // If generation failed
+      if (data.status === "error") {
+        throw new Error(data.error || "Generation failed");
       }
 
-      setProgress({ message: "Book ready!" });
-      toast.success("Book generated!", { description: `${localPageCount} pages created. Opening editor...` });
-      if (localBookId) {
-        setTimeout(() => openEditor(localBookId), 1000);
-      }
+      // If still generating (timeout occurred but book was created)
+      // Start polling for status
+      setProgress({ message: "Generation in progress...", totalPages: 7 });
+      let pollCount = 0;
+      const maxPolls = 60; // Poll for up to 3 minutes (60 × 3s)
+
+      const pollInterval = setInterval(async () => {
+        pollCount++;
+        if (pollCount > maxPolls) {
+          clearInterval(pollInterval);
+          setGenerating(false);
+          toast.error("Generation timed out. Please try again.");
+          return;
+        }
+
+        try {
+          const statusRes = await fetch(`/api/quill/generate?bookId=${localBookId}`);
+          const status = await statusRes.json();
+
+          if (status.pages > 0) {
+            setProgress({ message: `Generated ${status.pages} pages...`, totalPages: status.pages });
+            // Update page list
+            const pages = [];
+            for (let i = 0; i < status.pages; i++) {
+              pages.push({ pageIndex: i, pageType: "generated", pageTitle: `Page ${i + 1}` });
+            }
+            setGeneratedPages(pages);
+          }
+
+          if (status.done) {
+            clearInterval(pollInterval);
+            setGenerating(false);
+
+            if (status.status === "ready" && status.pages > 0) {
+              setBookMeta({ title: status.title, subtitle: "", description: "" });
+              setProgress({ message: `Book ready! ${status.pages} pages generated.`, totalPages: status.pages });
+              toast.success("Book generated!", { description: `${status.pages} pages created. Opening editor...` });
+              setTimeout(() => openEditor(localBookId), 1500);
+            } else if (status.status === "error") {
+              toast.error("Generation failed", { description: "Please try again." });
+              setProgress({ message: "Generation failed. Please try again." });
+            }
+          }
+        } catch (pollErr) {
+          console.error("Poll error:", pollErr);
+        }
+      }, 3000);
+
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       toast.error("Generation failed", { description: message });
       setProgress({ message: `Error: ${message}` });
     } finally {
-      setGenerating(false);
+      // Don't set generating to false here if polling
+      // It will be set in the poll interval
     }
   };
 
-  // Unused — kept for compatibility
+  // Unused
   const handleSSE = (_event: string, _data: Record<string, unknown>) => {};
 
   return (
