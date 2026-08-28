@@ -176,6 +176,8 @@ export function GeneratorView() {
 
     // Local bookId reference — bypasses stale React state in setTimeout
     let localBookId: string | null = null;
+    let localPageCount = 0;
+    let hadError = false;
 
     try {
       const res = await fetch("/api/quill/generate", {
@@ -221,20 +223,38 @@ export function GeneratorView() {
           if (line.startsWith("event:")) {
             event = line.slice(6).trim();
           } else if (line.startsWith("data:") && event) {
-            const data = JSON.parse(line.slice(5).trim());
-            if (event === "book-created") {
-              localBookId = data.bookId as string;
+            try {
+              const data = JSON.parse(line.slice(5).trim());
+              if (event === "book-created") {
+                localBookId = data.bookId as string;
+              }
+              if (event === "page-done") {
+                localPageCount++;
+              }
+              if (event === "error") {
+                hadError = true;
+              }
+              handleSSE(event, data);
+            } catch (parseErr) {
+              console.error("SSE parse error:", parseErr, "line:", line);
             }
-            handleSSE(event, data);
             event = "";
           }
         }
       }
 
+      // Only redirect to editor if we actually generated pages
+      if (hadError) {
+        throw new Error("Generation encountered an error. Check the error message above and try again.");
+      }
+      if (localPageCount === 0) {
+        throw new Error("Generation produced no pages. The server may have timed out. Please try with fewer topics or disable web research.");
+      }
+
       // Done
       setProgress({ message: "Book ready!" });
       toast.success("Book generated!", {
-        description: "Opening the editor...",
+        description: `${localPageCount} pages created. Opening the editor...`,
       });
       // Use the local reference — guaranteed to have the latest value
       const id = localBookId ?? bookId;
