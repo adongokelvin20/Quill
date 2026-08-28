@@ -17,7 +17,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60; // Works on Hobby plan
 export const dynamic = "force-dynamic";
 
-const MAX_GENERATION_TIME_MS = 45000; // 45 seconds — leaves 15s buffer before 60s timeout
+const MAX_GENERATION_TIME_MS = 30000; // 30 seconds — safe within 60s Vercel limit
 
 export async function POST(req: NextRequest) {
   let body: {

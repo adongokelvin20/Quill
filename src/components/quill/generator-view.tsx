@@ -184,23 +184,41 @@ export function GeneratorView() {
         attempt++;
 
         // Step 1: Call generate (new or resume)
-        const res = await fetch("/api/quill/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            currentBookId
-              ? { bookId: currentBookId } // Resume
-              : { // New
-                  level,
-                  subject,
-                  term,
-                  topics: allTopics,
-                  lessons: 1,
-                  research: false,
-                  useSections: false,
-                }
-          ),
-        });
+        // Use AbortController with 40s timeout (Vercel Hobby is 60s, we use 30s on server)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 40000);
+
+        let res: Response;
+        try {
+          res = await fetch("/api/quill/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(
+              currentBookId
+                ? { bookId: currentBookId } // Resume
+                : { // New
+                    level,
+                    subject,
+                    term,
+                    topics: allTopics,
+                    lessons: 1,
+                    research: false,
+                    useSections: false,
+                  }
+            ),
+            signal: controller.signal,
+          });
+        } catch (fetchErr) {
+          clearTimeout(timeoutId);
+          // If fetch failed (timeout), but we have a bookId, try to resume
+          if (currentBookId) {
+            console.log("Fetch failed, trying to resume...");
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+          throw new Error("Connection failed. Please try again.");
+        }
+        clearTimeout(timeoutId);
 
         if (!res.ok) {
           let errorMsg = `HTTP ${res.status}`;
