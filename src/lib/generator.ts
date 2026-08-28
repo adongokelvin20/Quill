@@ -493,23 +493,55 @@ async function sanitisePage(page: PageContent, onProgress?: (msg: string) => voi
     return { ...page, blocks };
   }
 
-  onProgress?.(`Generating ${imageBlocks.length} illustration${imageBlocks.length > 1 ? "s" : ""} in HD...`);
+  // SPEED OPTIMIZATION: Only generate images for cover, lesson, and section-divider pages.
+  // For exercise, homework, glossary, and closing pages, use instant Pollinations URLs
+  // (the browser loads them on-demand — no server-side generation needed).
+  const fastPageTypes = ["exercise", "homework", "glossary", "closing", "toc"];
+  if (fastPageTypes.includes(page.type)) {
+    const resolvedBlocks = blocks.map((b) => {
+      if (b.type === "image" && (!b.url || b.url === "PLACEHOLDER")) {
+        const alt = b.alt?.trim() || "children's book illustration";
+        const seed = Math.floor(Math.random() * 1_000_000);
+        const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
+        const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
+        return { ...b, url, source: "generated" as const };
+      }
+      return b;
+    }) as Block[];
+    return { ...page, blocks: resolvedBlocks };
+  }
+
+  // For cover and lesson pages: generate HD images via Z.ai (up to 1 image per page for speed)
+  const imagesToGenerate = imageBlocks.slice(0, 1); // Only generate 1 image per page
+  onProgress?.(`Generating illustration in HD...`);
 
   // Generate images one at a time. Z.ai is the primary source (1024x1024 HD).
   // Z.ai takes 10-30s per image, so we allow up to 60s per image.
   // If Z.ai fails after retries, fall back to Pollinations URL (instant, browser loads on-demand).
   const resolvedImages = new Map<string, { url: string; source: "zai-gen" | "pollinations" }>();
 
-  for (const block of imageBlocks) {
+  // Only generate 1 image per page (the first one) via Z.ai for speed.
+  // Remaining images get instant Pollinations URLs.
+  for (let idx = 0; idx < imageBlocks.length; idx++) {
+    const block = imageBlocks[idx];
     const alt = block.alt?.trim() || "children's book illustration";
+
+    if (idx >= 1) {
+      // Additional images: use instant Pollinations URL
+      const seed = Math.floor(Math.random() * 1_000_000);
+      const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
+      const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;
+      resolvedImages.set(block.id, { url, source: "pollinations" });
+      continue;
+    }
+
     try {
-      onProgress?.(`Generating illustration: ${alt.slice(0, 50)}...`);
-      // Try Z.ai with full retries (up to 60s total per image)
+      onProgress?.(`Generating illustration: ${alt.slice(0, 40)}...`);
+      // Try Z.ai with 1 retry (faster)
       const result = await generateHighQualityImage(alt);
       resolvedImages.set(block.id, result);
     } catch (err) {
       console.error("[quill] Image generation failed for:", alt.slice(0, 50), err);
-      // Last resort: Pollinations URL (instant, renders on-demand)
       const seed = Math.floor(Math.random() * 1_000_000);
       const encoded = encodeURIComponent(`${alt}. ${GLOBAL_ILLUSTRATION_MODIFIERS}`.slice(0, 1800));
       const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`;

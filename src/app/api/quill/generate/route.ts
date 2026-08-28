@@ -1,6 +1,6 @@
-// Quill — Book generation API (non-blocking).
-// Starts generation in the background and returns immediately.
-// The client polls /api/quill/generate/status?bookId=xxx for progress.
+// Quill — Book generation API (synchronous, streaming).
+// Generates the book in a single request and streams progress via SSE.
+// Uses maxDuration=300 (5 min) on Vercel Pro, or 60s on Hobby.
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
@@ -9,12 +9,8 @@ import { LEVELS, SUBJECTS, getLevel } from "@/lib/curriculum";
 import { getCurrentUserId } from "@/lib/auth";
 
 export const runtime = "nodejs";
-export const maxDuration = 30; // Quick response — generation runs in background
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
-
-// In-memory progress store (per server instance).
-// On Vercel, each function instance has its own memory, so we also persist to DB.
-const progressStore = new Map<string, { message: string; pages: number; total: number; done: boolean; error: string | null }>();
 
 export async function POST(req: NextRequest) {
   let body: {
@@ -47,20 +43,22 @@ export async function POST(req: NextRequest) {
       ? body.topics
       : subject.topics[term].slice(0, 3);
 
+    // Limit to 2 topics max to ensure generation completes within timeout
+    const limitedTopics = topics.slice(0, 2);
+
     const input: GenerateBookInput = {
       level: levelInfo,
       subject,
       term,
-      topics,
-      lessons: body.lessons ?? Math.min(4, topics.length),
+      topics: limitedTopics,
+      lessons: body.lessons ?? Math.min(2, limitedTopics.length),
       language: body.language ?? "english",
       targetPages: body.targetPages,
-      useSections: body.useSections ?? true,
+      useSections: false, // Always disable sections to save time
     };
 
     const userId = await getCurrentUserId(req);
 
-    // Create the book record
     let book;
     try {
       book = await db.book.create({
@@ -73,7 +71,7 @@ export async function POST(req: NextRequest) {
           term,
           language: input.language ?? "english",
           status: "generating",
-          topics: JSON.stringify(topics),
+          topics: JSON.stringify(limitedTopics),
           targetPages: body.targetPages ?? null,
           userId,
         },
@@ -86,144 +84,99 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Initialize progress
-    const totalEstimate = 4 + (input.topics.length * 3) + (input.useSections ? Math.ceil(input.topics.length / 3) : 0);
-    progressStore.set(book.id, { message: "Starting generation...", pages: 0, total: totalEstimate, done: false, error: null });
+    // Stream the generation — this keeps the connection alive
+    let streamClosed = false;
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
+        const send = (event: string, data: unknown) => {
+          if (streamClosed) return;
+          try {
+            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          } catch (e) {
+            console.error("[quill] stream enqueue error:", e);
+          }
+        };
 
-    // Start generation in the background (fire and forget — don't await)
-    generateBookInBackground(book.id, input, body.research ?? false, progressStore).catch((err) => {
-      console.error("[quill] background generation error:", err);
-      const prog = progressStore.get(book.id);
-      if (prog) {
-        prog.done = true;
-        prog.error = err instanceof Error ? err.message : String(err);
-      }
+        send("book-created", { bookId: book.id, level: levelInfo.id, subject: subject.id, term });
+
+        try {
+          for await (const ev of generateBook(input, { research: false })) { // Always disable research for speed
+            if (ev.type === "book-meta") {
+              try {
+                await db.book.update({
+                  where: { id: book.id },
+                  data: {
+                    title: ev.book!.title,
+                    subtitle: ev.book!.subtitle,
+                    description: ev.book!.description,
+                  },
+                });
+              } catch (e) {
+                console.error("[quill] book update error:", e);
+              }
+              send("book-meta", { bookId: book.id, ...ev.book! });
+            } else if (ev.type === "page-start") {
+              send("page-start", { pageIndex: ev.pageIndex, pageType: ev.pageType, pageTitle: ev.pageTitle });
+            } else if (ev.type === "page-done" && ev.page) {
+              try {
+                await db.page.create({
+                  data: {
+                    bookId: book.id,
+                    pageNumber: ev.pageIndex!,
+                    type: ev.pageType!,
+                    title: ev.pageTitle ?? null,
+                    content: JSON.stringify(ev.page),
+                  },
+                });
+              } catch (e) {
+                console.error("[quill] page create error:", e);
+              }
+              send("page-done", { pageIndex: ev.pageIndex, pageType: ev.pageType, pageTitle: ev.pageTitle, page: ev.page });
+            } else if (ev.type === "log") {
+              send("log", { message: ev.message });
+            } else if (ev.type === "complete") {
+              try {
+                await db.book.update({ where: { id: book.id }, data: { status: "ready" } });
+              } catch (e) {
+                console.error("[quill] book status update error:", e);
+              }
+              send("complete", { bookId: book.id, message: ev.message });
+            }
+          }
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error("[quill] generation error:", message);
+          try {
+            await db.book.update({ where: { id: book.id }, data: { status: "error" } });
+          } catch {
+            // ignore
+          }
+          send("error", { bookId: book.id, message });
+        } finally {
+          streamClosed = true;
+          try { controller.close(); } catch {}
+        }
+      },
     });
 
-    // Return immediately with the book ID
-    return NextResponse.json({
-      bookId: book.id,
-      status: "generating",
-      message: "Generation started. Poll /api/quill/generate/status?bookId=xxx for progress.",
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
     });
-  } catch (err) {
+  } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[quill] generate API error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-// Background generation function — runs without blocking the response
-async function generateBookInBackground(
-  bookId: string,
-  input: GenerateBookInput,
-  research: boolean,
-  progressStore: Map<string, { message: string; pages: number; total: number; done: boolean; error: string | null }>
-) {
-  let pageCount = 0;
-  try {
-    for await (const ev of generateBook(input, { research })) {
-      const prog = progressStore.get(bookId);
-      if (!prog) break;
-
-      if (ev.type === "book-meta") {
-        try {
-          await db.book.update({
-            where: { id: bookId },
-            data: {
-              title: ev.book!.title,
-              subtitle: ev.book!.subtitle,
-              description: ev.book!.description,
-            },
-          });
-        } catch (e) {
-          console.error("[quill] book update error:", e);
-        }
-      } else if (ev.type === "page-start") {
-        prog.message = `Generating page ${pageCount + 1}: ${ev.pageTitle ?? ""}`;
-      } else if (ev.type === "page-done" && ev.page) {
-        try {
-          await db.page.create({
-            data: {
-              bookId,
-              pageNumber: ev.pageIndex!,
-              type: ev.pageType!,
-              title: ev.pageTitle ?? null,
-              content: JSON.stringify(ev.page),
-            },
-          });
-          pageCount++;
-          prog.pages = pageCount;
-          prog.message = `Completed page ${pageCount}: ${ev.pageTitle ?? ""}`;
-        } catch (e) {
-          console.error("[quill] page create error:", e);
-        }
-      } else if (ev.type === "log") {
-        prog.message = ev.message ?? "";
-      } else if (ev.type === "complete") {
-        prog.done = true;
-        prog.message = `Complete! ${pageCount} pages generated.`;
-        try {
-          await db.book.update({ where: { id: bookId }, data: { status: "ready" } });
-        } catch (e) {
-          console.error("[quill] book status update error:", e);
-        }
-      }
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[quill] background generation error:", message);
-    const prog = progressStore.get(bookId);
-    if (prog) {
-      prog.done = true;
-      prog.error = message;
-    }
-    try {
-      await db.book.update({ where: { id: bookId }, data: { status: "error" } });
-    } catch (e) {
-      // ignore
-    }
-  }
-}
-
 // GET — list levels + subjects
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const bookId = url.searchParams.get("bookId");
-
-  // If bookId is provided, return progress
-  if (bookId) {
-    const prog = progressStore.get(bookId);
-    if (prog) {
-      return NextResponse.json({
-        bookId,
-        message: prog.message,
-        pages: prog.pages,
-        total: prog.total,
-        done: prog.done,
-        error: prog.error,
-      });
-    }
-    // Fallback to DB — check book status
-    try {
-      const book = await db.book.findUnique({ where: { id: bookId }, select: { status: true, _count: { select: { pages: true } } } });
-      if (book) {
-        return NextResponse.json({
-          bookId,
-          message: book.status === "ready" ? "Complete" : book.status === "error" ? "Generation failed" : "Generating...",
-          pages: book._count.pages,
-          total: 0,
-          done: book.status === "ready" || book.status === "error",
-          error: book.status === "error" ? "Generation failed" : null,
-        });
-      }
-    } catch {
-      // DB not available
-    }
-    return NextResponse.json({ error: "Book not found" }, { status: 404 });
-  }
-
-  // Otherwise return curriculum data
+export async function GET() {
   return NextResponse.json({
     levels: LEVELS,
     subjects: SUBJECTS.map((s) => ({
