@@ -56,9 +56,10 @@ server.log
 /db/
 /download/
 /upload/
-/scripts/
 /screens/
 /.zscripts/
+# Keep scripts/ for Vercel build (setup-db.mjs must be deployed)
+# /scripts/
 *.docx
 *.db
 *.db-journal
