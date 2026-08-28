@@ -1,192 +1,20 @@
 // Quill — Bringing intelligent education to life.
 // Prisma schema.
 //
-// For LOCAL DEV (SQLite):
-//   DATABASE_URL="file:./db/custom.db"
-//   provider = "sqlite"
+// This schema works with BOTH SQLite (local dev) and PostgreSQL (Vercel).
+// The provider is set automatically by the `scripts/setup-db.mjs` script
+// based on the DATABASE_URL format:
+//   - If DATABASE_URL starts with "file:" → SQLite (local dev)
+//   - If DATABASE_URL starts with "postgres:" → PostgreSQL (Vercel)
 //
-// For VERCEL PRODUCTION (PostgreSQL):
-//   DATABASE_URL="postgres://..." (from Vercel Postgres)
-//   provider = "postgresql"
-//
-// Switch the provider below based on your environment.
-// On Vercel, use "postgresql". Locally, use "sqlite".
+// For Vercel deployment, the build command in vercel.json runs the setup script
+// which sets the correct provider before prisma generate.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  // FOR VERCEL DEPLOYMENT: change this to "postgresql"
-  // FOR LOCAL DEV: keep this as "sqlite"
   provider = "sqlite"
   url      = env("DATABASE_URL")
-}
-
-// ---------------------------------------------------------------------------
-// Users & authentication (NextAuth v4)
-// ---------------------------------------------------------------------------
-
-model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  name         String?
-  // bcrypt-hashed password (for Credentials provider)
-  passwordHash String?
-  image        String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-
-  accounts     Account[]
-  sessions     Session[]
-  books        Book[]
-}
-
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-  @@index([userId])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-model VerificationToken {
-  identifier String
-  token      String
-  expires    DateTime
-
-  @@unique([identifier, token])
-}
-
-// ---------------------------------------------------------------------------
-// Books & pages
-// ---------------------------------------------------------------------------
-
-model Book {
-  id           String   @id @default(cuid())
-  title        String
-  subtitle     String?
-  description  String?
-
-  // Ghana education level: KG1, KG2, B1..B6, JHS1..JHS3
-  level        String
-  // Subject: english, maths, science, owop, rme, computing, creative_arts, french, career_tech
-  subject      String
-  // Term: 1, 2, 3
-  term         Int
-  // Language: english / twi / ga / ewe / dagbani (default english)
-  language     String   @default("english")
-
-  coverColor   String   @default("#0f766e")
-  accentColor  String   @default("#f59e0b")
-
-  // Status: draft / generating / ready / error
-  status       String   @default("draft")
-  // JSON: curriculum topics chosen for this book
-  topics       String?
-  // Total pages target (for condensing logic)
-  targetPages  Int?
-
-  // Owner — nullable so existing anonymous books still work after migration.
-  // API routes filter by userId; null userId books are visible to everyone
-  // (useful for shared / public-domain books).
-  userId       String?
-  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  pages        Page[]
-  exports      BookExport[]
-
-  @@index([userId])
-}
-
-model Page {
-  id           String   @id @default(cuid())
-  bookId       String
-  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
-  pageNumber   Int
-  // Page type: cover, toc, lesson, exercise, homework, glossary, activity, closing
-  type         String   @default("lesson")
-  title        String?
-  // Rich content stored as JSON: array of blocks (text, image, activity, table...)
-  content      String
-  // Optional teaching notes
-  notes        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@index([bookId, pageNumber])
-}
-
-model BookExport {
-  id           String   @id @default(cuid())
-  bookId       String
-  book         Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
-  // docx, pdf, json
-  format       String
-  // Stored file path under /download
-  filePath     String
-  fileSize     Int      @default(0)
-  createdAt    DateTime @default(now())
-}
-
-// ---------------------------------------------------------------------------
-// Asset library (image search / generation results, cached)
-// ---------------------------------------------------------------------------
-
-model Asset {
-  id           String   @id @default(cuid())
-  // Type: generated | searched | uploaded
-  source       String
-  // Original prompt or query
-  prompt       String
-  // Direct URL (data URL or remote URL)
-  url          String
-  // Width / height
-  width        Int?
-  height       Int?
-  // Optional alt text
-  alt          String?
-  // Optional tags
-  tags         String?
-  createdAt    DateTime @default(now())
-}
-
-// ---------------------------------------------------------------------------
-// Scraped web content cache
-// ---------------------------------------------------------------------------
-
-model ScrapedPage {
-  id           String   @id @default(cuid())
-  url          String   @unique
-  title        String?
-  // Plain-text content, truncated to ~50k chars
-  content      String
-  // Fetched at
-  fetchedAt    DateTime @default(now())
 }

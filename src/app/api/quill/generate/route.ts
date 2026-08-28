@@ -71,21 +71,32 @@ export async function POST(req: NextRequest) {
     const userId = await getCurrentUserId(req);
 
     // Create the book record up-front
-    const book = await db.book.create({
-      data: {
-        title: `${subject.name} for ${levelInfo.fullLabel}`,
-        subtitle: `Term ${term} • Quill Series`,
-        description: `Auto-generated textbook for ${levelInfo.fullLabel}.`,
-        level: levelInfo.id,
-        subject: subject.id,
-        term,
-        language: input.language ?? "english",
-        status: "generating",
-        topics: JSON.stringify(topics),
-        targetPages: body.targetPages ?? null,
-        userId,
-      },
-    });
+    let book;
+    try {
+      book = await db.book.create({
+        data: {
+          title: `${subject.name} for ${levelInfo.fullLabel}`,
+          subtitle: `Term ${term} • Quill Series`,
+          description: `Auto-generated textbook for ${levelInfo.fullLabel}.`,
+          level: levelInfo.id,
+          subject: subject.id,
+          term,
+          language: input.language ?? "english",
+          status: "generating",
+          topics: JSON.stringify(topics),
+          targetPages: body.targetPages ?? null,
+          userId,
+        },
+      });
+    } catch (dbErr) {
+      console.error("[quill] DB create error:", dbErr);
+      return new Response(
+        JSON.stringify({
+          error: "Database is not configured. On Vercel: go to Settings → Storage → create Postgres, then add DATABASE_URL, NEXTAUTH_SECRET, NEXTAUTH_URL to Environment Variables.",
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
 
     const stream = new ReadableStream({
       async start(controller) {

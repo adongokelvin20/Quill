@@ -192,7 +192,18 @@ export function GeneratorView() {
           useSections,
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      // Handle non-OK responses — check if it's a database error
+      if (!res.ok) {
+        let errorMsg = `HTTP ${res.status}`;
+        try {
+          const errData = await res.json();
+          if (errData.error) errorMsg = errData.error;
+        } catch {
+          // Response wasn't JSON
+        }
+        throw new Error(errorMsg);
+      }
       if (!res.body) throw new Error("No response body");
 
       const reader = res.body.getReader();
