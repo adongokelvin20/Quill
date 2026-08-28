@@ -194,16 +194,21 @@ export function GeneratorView() {
         }),
       });
 
-      if (!res.ok) {
+      // Check if the response is an error JSON (not SSE stream)
+      const contentType = res.headers.get("content-type") || "";
+      if (!res.ok || contentType.includes("application/json")) {
         let errorMsg = `HTTP ${res.status}`;
         try {
           const errData = await res.json();
           if (errData.error) errorMsg = errData.error;
-        } catch {}
+        } catch {
+          // Response wasn't JSON
+        }
         throw new Error(errorMsg);
       }
       if (!res.body) throw new Error("No response body");
 
+      // Read the SSE stream
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -212,41 +217,50 @@ export function GeneratorView() {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        let event = "";
-        for (const line of lines) {
-          if (line.startsWith("event:")) {
-            event = line.slice(6).trim();
-          } else if (line.startsWith("data:") && event) {
-            try {
-              const data = JSON.parse(line.slice(5).trim());
-              if (event === "book-created") localBookId = data.bookId as string;
-              if (event === "page-done") localPageCount++;
-              if (event === "error") hadError = true;
 
-              // Handle events
-              if (event === "book-created") {
-                setBookId(data.bookId as string);
-                setProgress({ message: "Creating book..." });
-              } else if (event === "book-meta") {
-                setBookMeta({ title: data.title, subtitle: data.subtitle, description: data.description });
-                setProgress({ message: `Generating: ${data.title}` });
-              } else if (event === "page-start") {
-                setProgress({ message: `Generating page ${(data.pageIndex ?? 0) + 1}: ${data.pageTitle ?? ""}`, pageIndex: data.pageIndex });
-              } else if (event === "page-done") {
-                setGeneratedPages((prev) => [...prev, { pageIndex: data.pageIndex, pageType: data.pageType, pageTitle: data.pageTitle }]);
-              } else if (event === "log") {
-                setProgress({ message: data.message });
-              } else if (event === "complete") {
-                setProgress({ message: "Complete!" });
-              } else if (event === "error") {
-                toast.error("Generation error", { description: data.message });
-              }
-            } catch (parseErr) {
-              console.error("SSE parse error:", parseErr);
+        // Split on double newline (SSE event delimiter)
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const evt of events) {
+          const lines = evt.split("\n");
+          let eventType = "";
+          let dataStr = "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              dataStr = line.slice(5).trim();
             }
-            event = "";
+          }
+          if (!eventType || !dataStr) continue;
+
+          try {
+            const data = JSON.parse(dataStr);
+            if (eventType === "book-created") localBookId = data.bookId as string;
+            if (eventType === "page-done") localPageCount++;
+            if (eventType === "error") hadError = true;
+
+            // Handle events
+            if (eventType === "book-created") {
+              setBookId(data.bookId as string);
+              setProgress({ message: "Creating book..." });
+            } else if (eventType === "book-meta") {
+              setBookMeta({ title: data.title, subtitle: data.subtitle, description: data.description });
+              setProgress({ message: `Generating: ${data.title}` });
+            } else if (eventType === "page-start") {
+              setProgress({ message: `Generating page ${(data.pageIndex ?? 0) + 1}: ${data.pageTitle ?? ""}`, pageIndex: data.pageIndex });
+            } else if (eventType === "page-done") {
+              setGeneratedPages((prev) => [...prev, { pageIndex: data.pageIndex, pageType: data.pageType, pageTitle: data.pageTitle }]);
+            } else if (eventType === "log") {
+              setProgress({ message: data.message });
+            } else if (eventType === "complete") {
+              setProgress({ message: "Complete!" });
+            } else if (eventType === "error") {
+              toast.error("Generation error", { description: data.message });
+            }
+          } catch (parseErr) {
+            console.error("SSE parse error:", parseErr, "data:", dataStr);
           }
         }
       }
