@@ -3,6 +3,7 @@
 // Results are cached in the ScrapedPage table so repeat queries are instant.
 
 import ZAI from "z-ai-web-dev-sdk";
+import "@/lib/zai-config"; // Ensure config file exists
 import { db } from "@/lib/db";
 
 export interface SearchResult {

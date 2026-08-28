@@ -17,6 +17,7 @@
 // which keeps the perceived latency low and avoids Vercel function timeouts.
 
 import ZAI from "z-ai-web-dev-sdk";
+import "@/lib/zai-config"; // Ensure config file exists
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
 import { researchTopic } from "@/lib/research";
@@ -385,7 +386,7 @@ async function generatePageJson(
         ],
         // Higher temperature for KG (more creative), lower for JHS (more precise)
         temperature: level.complexity <= 2 ? 0.8 : 0.6,
-        max_tokens: 2800,
+        max_tokens: 2000, // Reduced from 2800 for faster generation
       });
       const raw = res.choices?.[0]?.message?.content ?? "";
       if (!raw || raw.trim().length < 10) {

@@ -4,6 +4,7 @@
 // URL (the browser loads it on-demand, no server fetch needed).
 
 import ZAI from "z-ai-web-dev-sdk";
+import "@/lib/zai-config"; // Ensure config file exists
 import { db } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
@@ -17,7 +18,7 @@ export async function generateImageViaZAI(
   prompt: string,
   opts: { width?: number; height?: number; retries?: number } = {}
 ): Promise<string | null> {
-  const retries = opts.retries ?? 3;
+  const retries = opts.retries ?? 1; // Reduced from 3 to 1 for faster generation
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const zai = await ZAI.create();
