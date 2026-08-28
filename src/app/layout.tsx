@@ -5,6 +5,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { QuillSessionProvider } from "@/components/quill/session-provider";
 
+// Force dynamic rendering — the app uses useSession which can't be prerendered
+export const dynamic = "force-dynamic";
+
 const fredoka = Fredoka({
   variable: "--font-quill-display",
   subsets: ["latin"],

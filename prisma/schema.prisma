@@ -1,17 +1,24 @@
 // Quill — Bringing intelligent education to life.
-// Prisma schema. Works on SQLite (dev) and PostgreSQL (Vercel production).
+// Prisma schema.
 //
-// To deploy on Vercel with Postgres:
-//   1. Set DATABASE_URL to your Vercel Postgres connection string
-//   2. Change provider below from "sqlite" to "postgresql"
-//   3. Run: bun run db:push   (or prisma migrate dev --name init)
+// For LOCAL DEV (SQLite):
+//   DATABASE_URL="file:./db/custom.db"
+//   provider = "sqlite"
+//
+// For VERCEL PRODUCTION (PostgreSQL):
+//   DATABASE_URL="postgres://..." (from Vercel Postgres)
+//   provider = "postgresql"
+//
+// Switch the provider below based on your environment.
+// On Vercel, use "postgresql". Locally, use "sqlite".
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  // Switch this to "postgresql" when deploying to Vercel.
+  // FOR VERCEL DEPLOYMENT: change this to "postgresql"
+  // FOR LOCAL DEV: keep this as "sqlite"
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
