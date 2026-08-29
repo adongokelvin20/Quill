@@ -1,31 +1,10 @@
 // Quill — Book content generator.
-// Uses Z.ai LLM (chat completions) with curriculum-aware prompts to produce
-// rich, level-appropriate book pages as JSON block trees.
-//
-// Page-count condensing:
-//   The user can specify a target page count. The generator then picks the best
-//   "mode" to fit the selected topics into that many pages:
-//
-//     "full"      — lesson + exercise + homework (3 pages per topic)
-//     "condensed" — lesson + combined exercise/homework (2 pages per topic)
-//     "compact"   — lesson with embedded exercise (1 page per topic)
-//
-//   Fixed pages: cover, TOC, glossary, closing = 4 pages.
-//   Available pages for lessons = targetPages - 4.
-//
-// Streaming: each page is generated and sent to the client as it completes,
-// which keeps the perceived latency low and avoids Vercel function timeouts.
+// Uses direct Z.ai API calls (no SDK, no config file).
+// Generates text content first; images are lazy-loaded by the browser.
 
-import ZAI from "z-ai-web-dev-sdk";
-import "@/lib/zai-config"; // Ensure config file exists
+import { createChatCompletion } from "@/lib/zai-direct";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
-import { researchTopic } from "@/lib/research";
-import { generateHighQualityImage } from "@/lib/images";
-
-// Global modifiers that push the model toward clean, kid-friendly illustrations.
-const GLOBAL_ILLUSTRATION_MODIFIERS =
-  "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, well composed single focal point, neat and organized layout, no text, no watermark, no signature, no border";
 
 export type GenerationMode = "full" | "condensed" | "compact";
 
@@ -34,15 +13,10 @@ export interface GenerateBookInput {
   subject: SubjectInfo;
   term: 1 | 2 | 3;
   topics: string[];
-  // How many lessons to generate (each lesson = lesson page + exercise page + homework page)
   lessons?: number;
-  // Optional override for total pages
   language?: string;
-  // Research toggle — fetch authoritative reference text before generating
   research?: boolean;
-  // Target page count — if set, the generator picks the best condensing mode
   targetPages?: number;
-  // If true, group lessons into sections (units) with divider pages
   useSections?: boolean;
 }
 
@@ -56,419 +30,180 @@ export interface GenerateBookProgress {
   book?: { title: string; subtitle: string; description: string };
 }
 
-// ---------------------------------------------------------------------------
-// Condensing logic — given target pages and topic count, pick the best mode
-// ---------------------------------------------------------------------------
+const FIXED_PAGES = 4;
 
-const FIXED_PAGES = 4; // cover + TOC + glossary + closing
+const GLOBAL_ILLUSTRATION_MODIFIERS =
+  "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, well composed single focal point, neat and organized layout, no text, no watermark, no signature, no border";
 
-export interface CondensingPlan {
-  mode: GenerationMode;
-  lessonsToGenerate: number;
-  topicsToUse: string[];
-  pagesPerLesson: number;
-  estimatedTotalPages: number;
-  // Human-readable description for the UI
-  description: string;
-}
-
-export function planCondensing(targetPages: number, topics: string[]): CondensingPlan {
-  const availableForLessons = Math.max(0, targetPages - FIXED_PAGES);
-  const topicCount = topics.length;
-
-  // Try full mode first (3 pages per lesson)
-  if (availableForLessons >= 3 * topicCount) {
-    return {
-      mode: "full",
-      lessonsToGenerate: topicCount,
-      topicsToUse: topics,
-      pagesPerLesson: 3,
-      estimatedTotalPages: FIXED_PAGES + 3 * topicCount,
-      description: `Full mode: ${topicCount} lessons × 3 pages (lesson + exercise + homework) + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + 3 * topicCount} pages`,
-    };
-  }
-
-  // Try condensed mode (2 pages per lesson)
-  if (availableForLessons >= 2 * topicCount) {
-    return {
-      mode: "condensed",
-      lessonsToGenerate: topicCount,
-      topicsToUse: topics,
-      pagesPerLesson: 2,
-      estimatedTotalPages: FIXED_PAGES + 2 * topicCount,
-      description: `Condensed mode: ${topicCount} lessons × 2 pages (lesson + combined exercise/homework) + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + 2 * topicCount} pages`,
-    };
-  }
-
-  // Try compact mode (1 page per lesson) — fits all topics
-  if (availableForLessons >= topicCount) {
-    return {
-      mode: "compact",
-      lessonsToGenerate: topicCount,
-      topicsToUse: topics,
-      pagesPerLesson: 1,
-      estimatedTotalPages: FIXED_PAGES + topicCount,
-      description: `Compact mode: ${topicCount} lessons × 1 page (lesson with embedded exercise) + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + topicCount} pages`,
-    };
-  }
-
-  // Not enough pages for all topics — truncate to fit
-  const fittingTopics = Math.max(1, availableForLessons);
-  const truncated = topics.slice(0, fittingTopics);
-  return {
-    mode: "compact",
-    lessonsToGenerate: truncated.length,
-    topicsToUse: truncated,
-    pagesPerLesson: 1,
-    estimatedTotalPages: FIXED_PAGES + truncated.length,
-    description: `Compact mode (truncated): only ${truncated.length} of ${topicCount} topics fit in ${targetPages} pages. Each lesson = 1 page (lesson with embedded exercise). + ${FIXED_PAGES} fixed pages = ${FIXED_PAGES + truncated.length} pages`,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// System prompt builder — tuned per class level
-// ---------------------------------------------------------------------------
-
-function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo, mode: GenerationMode): string {
+function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo): string {
   const isKG = level.complexity <= 1;
   const isLower = level.complexity <= 2;
   const isUpper = level.complexity >= 4;
 
-  const modeNote =
-    mode === "full"
-      ? "MODE: Full. Each lesson spans 3 pages: lesson page, exercise page, homework page. Generate rich, separate content for each."
-      : mode === "condensed"
-      ? "MODE: Condensed. Each lesson spans 2 pages: lesson page, then a combined exercise+homework page (call it 'Practice & Homework'). Keep content tight but complete."
-      : "MODE: Compact. Each lesson is a single page that includes the lesson content AND a short embedded exercise (3-4 questions) at the bottom. Be concise but cover the key points.";
-
   return `You are Quill, an expert Ghana Education Service (GES) curriculum author. You write teaching and learning materials for Ghanaian basic schools.
 
-TASK
-You generate one page of an educational book as a JSON object. The JSON must match this TypeScript type exactly:
+TASK: Generate one page of an educational book as a JSON object.
 
 interface PageContent {
-  type: "cover" | "toc" | "lesson" | "exercise" | "homework" | "glossary" | "activity" | "closing";
+  type: "cover" | "toc" | "lesson" | "exercise" | "homework" | "glossary" | "closing";
   title?: string;
   blocks: Block[];
 }
 
-Block is a discriminated union — each block has a "type" field plus its data. Valid block types:
+Valid block types:
+- heading { type, text, level?: 1|2|3 }
+- subheading { type, text }
+- paragraph { type, text }
+- image { type, url: "PLACEHOLDER", alt: string, caption?: string }
+- bulleted-list { type, items: string[] }
+- numbered-list { type, items: string[] }
+- table { type, headers: string[], rows: string[][] }
+- activity { type, title, instructions, items: string[] }
+- fill-blanks { type, title, instructions, sentences: string[], wordBank?: string[] }
+- multiple-choice { type, title, instructions, questions: [{question, options, answerIndex?}] }
+- matching { type, title, instructions, pairs: [{left, right}] }
+- word-bank { type, title?, words: string[] }
+- vocabulary { type, title, words: [{word, meaning}] }
+- divider { type }
+- spacer { type, height?: number }
+- quote { type, text, attribution? }
+- tip { type, title?, text }
+- homework { type, title, instructions, items: string[] }
 
-- heading           { type: "heading", text: string, level?: 1|2|3 }
-- subheading        { type: "subheading", text: string }
-- paragraph         { type: "paragraph", text: string }
-- image             { type: "image", url: "PLACEHOLDER", alt: string, caption?: string, width?: number, align?: "left"|"center"|"right" }
-- image-caption     { type: "image-caption", text: string }
-- bulleted-list     { type: "bulleted-list", items: string[] }
-- numbered-list     { type: "numbered-list", items: string[] }
-- table             { type: "table", headers: string[], rows: string[][] }
-- activity          { type: "activity", title: string, instructions: string, items: string[] }
-- fill-blanks       { type: "fill-blanks", title: string, instructions: string, sentences: string[], wordBank?: string[] }
-- multiple-choice   { type: "multiple-choice", title: string, instructions: string, questions: { question: string, options: string[], answerIndex?: number }[] }
-- matching          { type: "matching", title: string, instructions: string, pairs: { left: string, right: string }[] }
-- word-bank         { type: "word-bank", title?: string, words: string[] }
-- tracing           { type: "tracing", title: string, items: string[] }
-- vocabulary        { type: "vocabulary", title: string, words: { word: string, meaning: string }[] }
-- divider           { type: "divider" }
-- spacer            { type: "spacer", height?: number }
-- quote             { type: "quote", text: string, attribution?: string }
-- tip               { type: "tip", title?: string, text: string }
-- homework          { type: "homework", title: string, instructions: string, items: string[] }
+For images: url must be "PLACEHOLDER". Write detailed alt text describing the illustration.
 
-For every image you want on the page, output an "image" block with url: "PLACEHOLDER" and a clear, detailed "alt" describing EXACTLY what the illustration should show. The alt text is used to generate the illustration, so be specific and descriptive.
+AUDIENCE: ${level.fullLabel} (ages ${level.ageRange}, complexity ${level.complexity}/5)
+${isKG ? "KG: very short sentences (3-7 words). Picture-heavy. Always include 1-2 image blocks." : ""}
+${isLower ? "Lower basic: short sentences (5-10 words). Include 1 image block." : ""}
+${isUpper ? "Upper basic/JHS: paragraphs of 3-5 sentences. Include diagrams/tables." : ""}
 
-IMAGE ALT TEXT RULES — write alt text that produces clean, organized illustrations:
-- Be specific: "A colourful diagram showing the water cycle with labelled arrows for evaporation, condensation, and precipitation" is better than "water cycle"
-- Single focal point: describe ONE main subject or scene, not multiple unrelated things
-- For diagrams/charts: describe the layout — "a labelled diagram of a plant cell with parts clearly marked: nucleus, cell wall, chloroplast, vacuole"
-- For scenes: describe the setting and action — "a Ghanaian teacher pointing to a blackboard showing the alphabet, with children sitting at desks"
-- For KG/lower-basic: "one big colourful cartoon of [subject], simple shapes, friendly faces"
-- For upper levels: "a clean educational diagram showing [concept], with clear labels and arrows"
-- NEVER ask for text in the image — the model can't render text well. Instead describe the visual elements.
-- Keep alt text under 200 characters for best results.
+CULTURAL CONTEXT: Use Ghanaian names (Kwame, Ama, Kofi), Cedi (GH₵), local foods, festivals.
 
-For KG/lower-basic, prefer ONE big image per page (not multiple small ones).
-For upper levels, use diagrams, charts, or labelled figures where appropriate.
+OUTPUT: Only valid JSON. No markdown fences, no explanation.
 
-${modeNote}
-
-AUDIENCE & STYLE — match the level precisely:
-- Level: ${level.fullLabel} (ages ${level.ageRange}, complexity ${level.complexity}/5)
-- Subject: ${subject.name}
-- Reading level: ${level.readingLevel}
-- ${isKG ? `KG rules: very short sentences (3-7 words). Lots of repetition. Picture-heavy. Vocabulary focus on everyday words. Activities: tracing, matching pictures, colouring, circling, fill-blanks with a word bank, "circle the correct word". ALWAYS include 2-4 image blocks.`
-  : isLower ? `Lower basic rules: short sentences (5-10 words). Simple grammar. Activities: matching, fill-blanks, multiple-choice with 3 options, short word problems. Always include 1-2 illustrations or diagrams.`
-  : isUpper ? `Upper basic / JHS rules: paragraphs of 3-5 sentences. Use sub-headings. Include a table, diagram, or infographic. Activities: multiple-choice (4 options), short-answer, structured questions, word problems with real Ghana context.`
-  : `Mid basic rules: 2-3 sentence paragraphs. Mix of pictures and short text. Activities: matching, fill-blanks, multiple-choice (3 options), simple word problems.`}
-
-CULTURAL CONTEXT — Ghanaianise the content:
-- Use Ghanaian names (Kwame, Ama, Kofi, Abena, Yaw, Akosua, Esi, Kojo, Adwoa, Kwabena).
-- Use Cedi (GH₵) for money.
-- Use local foods (banku, jollof, kenkey, waakye, fufu, tuo zaafi), markets (Makola, Kejetia), landmarks (Independence Arch, Cape Coast Castle, Mole National Park, Lake Volta).
-- Reference Ghanaian festivals (Homowo, Aboakyir, Hogbetsotso, Damba, Bakatue).
-- Use metric units (cm, m, km, kg).
-
-LANGUAGE: Mainly English. Use simple Ghanaian English. Avoid slang.
-
-OUTPUT: Only output the JSON object. No markdown fences, no commentary.
-
-CRITICAL: Return valid JSON only. No text before or after.`;
+CRITICAL: Return valid JSON only. Start with { and end with }.`;
 }
-
-// ---------------------------------------------------------------------------
-// Page prompt builder
-// ---------------------------------------------------------------------------
 
 function buildCoverPrompt(input: GenerateBookInput): string {
-  return `Generate a professional COVER page for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}.
+  return `Generate a COVER page for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}.
 
-The cover should be visually striking and well-organized, containing these blocks IN ORDER:
+Include: heading (catchy title), subheading ("Term ${input.term} • Quill Series"), paragraph (short description), image block (alt: "colourful illustration of Ghanaian children learning ${input.subject.name}"), paragraph ("Name: ___________  Class: ___________"), divider, paragraph ("Quill — Bringing intelligent education to life").
 
-1. A "spacer" block (height: 60) at the top for visual breathing room
-2. A "heading" block with the book title — make it catchy and relevant (e.g. "${input.subject.name} Adventures" or "Discovering ${input.subject.name}")
-3. A "subheading" block with the subtitle: "Term ${input.term} • Quill Series"
-4. A "paragraph" block with a short, engaging one-line description (e.g. "A complete ${input.subject.name} textbook for ${input.level.fullLabel}, aligned with the GES curriculum.")
-5. A "spacer" block (height: 40)
-6. A single large "image" block — a hero illustration. Alt text should describe a SPECIFIC, beautiful scene: "A colourful illustration of Ghanaian children in a classroom learning ${input.subject.name}, with books and educational materials, warm sunlight, professional children's book art style"
-7. A "spacer" block (height: 40)
-8. A "paragraph" block with: "Name: _______________    Class: _______________"
-9. A "divider" block
-10. A "paragraph" block with small text: "Quill — Bringing intelligent education to life"
-
-Make the title creative and engaging, not just "${input.subject.name} for ${input.level.fullLabel}".
-
-Return JSON for a PageContent with type: "cover".`;
+Return JSON with type: "cover".`;
 }
 
-function buildTocPrompt(input: GenerateBookInput, plan: CondensingPlan): string {
-  return `Generate a TABLE OF CONTENTS page for the same book. List the ${plan.lessonsToGenerate} lessons, each on a numbered line: "Lesson N — Topic Title ........... page N".
+function buildTocPrompt(input: GenerateBookInput, topics: string[]): string {
+  return `Generate a TABLE OF CONTENTS page. List these ${topics.length} lessons:
+${topics.map((t, i) => `${i + 1}. ${t}`).join("\n")}
 
-Use the following topics (in order):
-${plan.topicsToUse.map((t, i) => `${i + 1}. ${t}`).join("\n")}
-
-Return JSON for a PageContent with type: "toc".`;
+Use a numbered-list block. Return JSON with type: "toc".`;
 }
 
-function buildLessonPrompt(
-  input: GenerateBookInput,
-  topic: string,
-  lessonNumber: number,
-  research: string,
-  mode: GenerationMode
-): string {
-  const r = research ? `\n\nREFERENCE MATERIAL (use this as authoritative source):\n${research}\n` : "";
-  const compactNote =
-    mode === "compact"
-      ? "\n\nIMPORTANT: Since this is COMPACT mode (single-page lesson), include a short embedded exercise at the bottom of the same page — use a 'fill-blanks' block with 3 sentences OR a 'multiple-choice' block with 3 questions. Do NOT generate separate exercise or homework pages."
-      : "";
+function buildLessonPrompt(input: GenerateBookInput, topic: string, lessonNum: number): string {
+  return `Generate a LESSON page for Lesson ${lessonNum}: ${topic}.
 
-  return `Generate a LESSON page for Lesson ${lessonNumber} of ${input.level.fullLabel} ${input.subject.name}, Term ${input.term}.
+Include:
+1. Heading: "Lesson ${lessonNum}: ${topic}"
+2. Learning objectives (3-4 bullets)
+3. Introduction paragraph
+4. Main content (2-3 subheadings with paragraphs)
+5. One image block (alt describing a relevant illustration)
+6. Key Vocabulary (3-5 terms with meanings)
+7. Teacher's Tip
 
-Topic: ${topic}${r}${compactNote}
-
-Structure:
-1. Heading: "Lesson ${lessonNumber}: ${topic}"
-2. Learning objectives (3-4 bullets) — what the learner will be able to do after the lesson
-3. A short, level-appropriate introduction paragraph
-4. The main content — broken into 2-4 sub-headings with paragraphs/lists/tables
-5. At least one labelled image (diagram or illustration) where it aids understanding
-6. A "Key Vocabulary" section with 3-5 terms and meanings
-7. A "Teacher's Tip" block
-
-Keep the content rich but appropriate for the reading level. Return JSON for a PageContent with type: "lesson".`;
+Return JSON with type: "lesson".`;
 }
 
-function buildExercisePrompt(
-  input: GenerateBookInput,
-  topic: string,
-  lessonNumber: number,
-  mode: GenerationMode
-): string {
-  if (mode === "condensed") {
-    return `Generate a COMBINED EXERCISE + HOMEWORK page for Lesson ${lessonNumber} (${topic}) of ${input.level.fullLabel} ${input.subject.name}.
+function buildExercisePrompt(input: GenerateBookInput, topic: string, lessonNum: number): string {
+  return `Generate an EXERCISE page for Lesson ${lessonNum}: ${topic}.
 
-This single page serves as both the in-class exercise AND the take-home homework. Structure it as:
-1. Heading: "Practice & Homework — Lesson ${lessonNumber}"
-2. A "Name: ___________  Date: ___________" line at the top
-3. Section A — In-class practice (a "fill-blanks" block with 4-5 sentences, with a word bank)
-4. Section B — Multiple choice (a "multiple-choice" block with 3-4 questions, options A/B/C/D, include answerIndex)
-5. Section C — Take-home (a "homework" block with 3-4 short tasks students complete at home)
-6. An encouraging image (alt text describing a relevant illustration)
-7. A "tip" block at the bottom: "Complete Section A and B in class. Take Section C home."
+Include:
+- "Name: ___________  Date: ___________" paragraph
+- One fill-blanks block (4-5 sentences, with word bank)
+- One multiple-choice block (3-4 questions, 4 options each, include answerIndex)
+- One matching block (4-5 pairs)
 
-Return JSON for a PageContent with type: "exercise".`;
-  }
-
-  return `Generate an EXERCISE page for Lesson ${lessonNumber} (${topic}) of ${input.level.fullLabel} ${input.subject.name}.
-
-The exercise should reinforce the lesson. Include a mix of:
-- 1 "fill-blanks" activity (4-6 sentences) with a word bank
-- 1 "multiple-choice" activity (3-5 questions) with options A/B/C/D — include answerIndex
-- 1 "matching" activity (4-6 pairs) — scramble the right column order
-- For KG/lower-basic: also add 1 "activity" block (e.g. "Colour the pictures", "Circle the correct word")
-- For upper-basic/JHS: add 1 short-answer "activity" with 2-3 questions
-
-Include a "Name: ___________  Date: ___________" line at the top.
-Add an encouraging image (alt text describing a relevant illustration).
-Use a "tip" block at the bottom: "Remember to check your answers!"
-
-Return JSON for a PageContent with type: "exercise".`;
+Return JSON with type: "exercise".`;
 }
 
-function buildHomeworkPrompt(
-  input: GenerateBookInput,
-  topic: string,
-  lessonNumber: number
-): string {
-  return `Generate a HOMEWORK page for Lesson ${lessonNumber} (${topic}) of ${input.level.fullLabel} ${input.subject.name}.
+function buildHomeworkPrompt(input: GenerateBookInput, topic: string, lessonNum: number): string {
+  return `Generate a HOMEWORK page for Lesson ${lessonNum}: ${topic}.
 
-The homework should be doable at home without supervision. Include:
-- A "homework" block with title "Homework — Lesson ${lessonNumber}" and 4-6 short tasks
-- One "fill-blanks" activity (3-4 sentences)
-- One "multiple-choice" activity (2-3 questions)
-- For KG/lower-basic: a "tracing" or "activity" block (e.g. "Draw and colour...", "Practise writing...")
-- For upper-basic/JHS: a short-answer "activity" with 2 questions
+Include:
+- "Name: ___________  Date: ___________" paragraph
+- One homework block (4-5 short tasks)
+- One fill-blanks block (3-4 sentences)
 
-Include "Name: ___________  Date: ___________" at the top.
-Add a small decorative image.
-Add a "tip" block: "Bring your homework to the next class!"
-
-Return JSON for a PageContent with type: "homework".`;
+Return JSON with type: "homework".`;
 }
 
-function buildSectionDividerPrompt(input: GenerateBookInput, sectionNumber: number, sectionTitle: string, lessonsInSection: string[]): string {
-  return `Generate a SECTION DIVIDER page for Section ${sectionNumber} of a ${input.level.fullLabel} ${input.subject.name} textbook.
-
-Section title: "${sectionTitle}"
-Lessons in this section: ${lessonsInSection.map((l, i) => `${i + 1}. ${l}`).join("\n")}
-
-The section divider should contain:
-- A big heading: "Section ${sectionNumber}: ${sectionTitle}"
-- A short introductory paragraph (2-3 sentences) about what this section covers
-- A bulleted list of the lessons in this section
-- A single large decorative image with alt text describing a themed illustration
-
-Return JSON for a PageContent with type: "section-divider".`;
+function buildGlossaryPrompt(input: GenerateBookInput): string {
+  return `Generate a GLOSSARY page for ${input.subject.name}. List 10 key terms with one-sentence meanings. Use a vocabulary block. Return JSON with type: "glossary".`;
 }
 
 function buildClosingPrompt(input: GenerateBookInput): string {
-  return `Generate a CLOSING page for the ${input.level.fullLabel} ${input.subject.name} Term ${input.term} book.
-
-Content:
+  return `Generate a CLOSING page. Include:
 - Heading: "Well Done!"
-- An encouraging paragraph
-- A "quote" block with an inspirational quote about learning (e.g. from a Ghanaian leader like Kwame Nkrumah or Kofi Annan)
-- A "tip" block: "Keep practising every day!"
-- A decorative image with alt text describing a celebration scene
+- Encouraging paragraph
+- A quote block with an inspirational quote about learning
+- A tip block: "Keep practising every day!"
+- One image block (alt: "celebration scene with children cheering")
 
-Return JSON for a PageContent with type: "closing".`;
+Return JSON with type: "closing".`;
 }
 
-// ---------------------------------------------------------------------------
-// LLM call — uses Z.ai SDK with strict JSON parsing & retries
-// ---------------------------------------------------------------------------
-
-async function generatePageJson(
-  systemPrompt: string,
-  userPrompt: string,
-  level: LevelInfo,
-  onProgress?: (msg: string) => void
-): Promise<PageContent> {
-  const zai = await ZAI.create();
-
+async function generatePageJson(systemPrompt: string, userPrompt: string, level: LevelInfo): Promise<PageContent> {
   const tryOnce = async (attempt: number): Promise<PageContent | null> => {
     try {
-      onProgress?.(`Generating content (attempt ${attempt})...`);
-      const res = await zai.chat.completions.create({
+      const raw = await createChatCompletion({
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        // Higher temperature for KG (more creative), lower for JHS (more precise)
         temperature: level.complexity <= 2 ? 0.8 : 0.6,
-        max_tokens: 2000, // Reduced from 2800 for faster generation
+        max_tokens: 2000,
       });
-      const raw = res.choices?.[0]?.message?.content ?? "";
-      if (!raw || raw.trim().length < 10) {
-        console.error("[quill] Empty LLM response on attempt", attempt);
-        return null;
-      }
-      const parsed = parsePageJson(raw);
-      if (!parsed) {
-        console.error("[quill] JSON parse failed on attempt", attempt, "raw length:", raw.length);
-      }
-      return parsed;
+
+      if (!raw || raw.trim().length < 10) return null;
+      return parsePageJson(raw);
     } catch (err) {
-      console.error("[quill] generatePageJson error on attempt", attempt, err);
+      console.error(`[quill] generatePageJson attempt ${attempt} error:`, err);
       return null;
     }
   };
 
-  // Try up to 3 times with different temperatures
   let page = await tryOnce(1);
   if (!page) {
-    // Retry with lower temperature and explicit JSON reminder
-    onProgress?.("Retrying with stricter formatting...");
-    const res = await zai.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-        { role: "system", content: "CRITICAL: Your previous response was not valid JSON. Output ONLY the JSON object now. No markdown fences, no explanation, no text before or after. Start with { and end with }." },
-      ],
-      temperature: 0.2,
-      max_tokens: 2800,
-    });
-    const raw = res.choices?.[0]?.message?.content ?? "";
-    page = parsePageJson(raw);
+    page = await tryOnce(2);
   }
   if (!page) {
-    // Third try with minimal prompt
-    onProgress?.("Final retry...");
-    const res = await zai.chat.completions.create({
-      messages: [
-        { role: "system", content: "Output a JSON object for a lesson page. Start with { and end with }." },
-        { role: "user", content: userPrompt.slice(0, 500) },
-      ],
-      temperature: 0.1,
-      max_tokens: 2000,
-    });
-    const raw = res.choices?.[0]?.message?.content ?? "";
-    page = parsePageJson(raw);
-  }
-  if (!page) {
-    // Fallback: minimal page with the topic name
-    onProgress?.("Using fallback content...");
+    // Fallback
     page = {
       type: "lesson",
       title: "Lesson",
       blocks: [
         { id: makeId(), type: "heading", text: "Lesson" },
-        { id: makeId(), type: "paragraph", text: "This page could not be generated automatically. Please use the editor to add content manually, or try regenerating the book." },
-        { id: makeId(), type: "tip", title: "Tip", text: "You can edit any page in the editor by clicking on it and using the block panel on the right." },
+        { id: makeId(), type: "paragraph", text: "Content could not be generated. Please edit this page manually." },
       ],
     };
   }
-  return sanitisePage(page, onProgress);
+  return sanitisePage(page);
 }
 
 function parsePageJson(raw: string): PageContent | null {
   if (!raw) return null;
-  // Strip code fences if present
   let txt = raw.trim();
   if (txt.startsWith("```")) {
     txt = txt.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
   }
-  // Try direct parse
   try {
     return JSON.parse(txt) as PageContent;
   } catch {
-    // Try to find first { ... } block
     const start = txt.indexOf("{");
     const end = txt.lastIndexOf("}");
     if (start >= 0 && end > start) {
-      const slice = txt.slice(start, end + 1);
       try {
-        return JSON.parse(slice) as PageContent;
+        return JSON.parse(txt.slice(start, end + 1)) as PageContent;
       } catch {
         return null;
       }
@@ -477,25 +212,12 @@ function parsePageJson(raw: string): PageContent | null {
   }
 }
 
-async function sanitisePage(page: PageContent, onProgress?: (msg: string) => void): Promise<PageContent> {
-  // Ensure every block has an id
+function sanitisePage(page: PageContent): PageContent {
   const blocks = (page.blocks ?? []).map((b) =>
     (b as Block).id ? (b as Block) : { ...(b as Block), id: makeId() }
   ) as Block[];
 
-  // Find all image blocks that need URLs
-  const imageBlocks = blocks.filter(
-    (b): b is Extract<Block, { type: "image" }> =>
-      b.type === "image" && (!b.url || b.url === "PLACEHOLDER")
-  );
-
-  if (imageBlocks.length === 0) {
-    return { ...page, blocks };
-  }
-
-  // SPEED OPTIMIZATION: Use instant Pollinations URLs for ALL pages.
-  // The browser loads images on-demand — no server-side image generation needed.
-  // This makes each page take ~10s instead of ~30s (LLM only, no image API call).
+  // Replace PLACEHOLDER image URLs with instant Pollinations URLs
   const resolvedBlocks = blocks.map((b) => {
     if (b.type === "image" && (!b.url || b.url === "PLACEHOLDER")) {
       const alt = b.alt?.trim() || "children's book illustration";
@@ -510,137 +232,56 @@ async function sanitisePage(page: PageContent, onProgress?: (msg: string) => voi
   return { ...page, blocks: resolvedBlocks };
 }
 
-// ---------------------------------------------------------------------------
-// Book title / subtitle generator
-// ---------------------------------------------------------------------------
-
-export async function generateBookMeta(input: GenerateBookInput): Promise<{
-  title: string;
-  subtitle: string;
-  description: string;
-}> {
+export async function generateBookMeta(input: GenerateBookInput): Promise<{ title: string; subtitle: string; description: string }> {
   try {
-    const zai = await ZAI.create();
-    const res = await zai.chat.completions.create({
+    const raw = await createChatCompletion({
       messages: [
-        {
-          role: "system",
-          content: "You are Quill, a Ghana Education Service textbook editor. Output a single JSON object only. No markdown fences, no text before or after.",
-        },
-        {
-          role: "user",
-          content: `Suggest a title, subtitle, and short description (1-2 sentences) for a ${input.level.fullLabel} ${input.subject.name} textbook for Term ${input.term}. Topics covered: ${input.topics.slice(0, 5).join(", ")}${input.topics.length > 5 ? "..." : ""}. Make the title catchy but appropriate for the level. Return JSON: { "title": string, "subtitle": string, "description": string }`,
-        },
+        { role: "system", content: "Output a JSON object only. No markdown." },
+        { role: "user", content: `Suggest a title, subtitle, and description for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}. Topics: ${input.topics.slice(0, 3).join(", ")}. Return JSON: { "title": string, "subtitle": string, "description": string }` },
       ],
       temperature: 0.7,
-      max_tokens: 400,
+      max_tokens: 300,
     });
-    const raw = res.choices?.[0]?.message?.content ?? "";
 
-    // Try to parse as JSON directly
-    let parsed: { title?: string; subtitle?: string; description?: string } | null = null;
-    try {
-      parsed = JSON.parse(raw.trim());
-    } catch {
-      // Try to extract JSON from the response
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      if (start >= 0 && end > start) {
-        try {
-          parsed = JSON.parse(raw.slice(start, end + 1));
-        } catch {
-          parsed = null;
-        }
-      }
+    let txt = raw.trim();
+    if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+    const start = txt.indexOf("{");
+    const end = txt.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(txt.slice(start, end + 1));
+      if (parsed.title) return { title: parsed.title, subtitle: parsed.subtitle ?? `Term ${input.term} • Quill Series`, description: parsed.description ?? "" };
     }
-
-    if (parsed && parsed.title) {
-      return {
-        title: parsed.title,
-        subtitle: parsed.subtitle ?? `Term ${input.term} • Quill Series`,
-        description: parsed.description ?? `A ${input.subject.name} textbook for ${input.level.fullLabel}.`,
-      };
-    }
-    return {
-      title: `${input.subject.name} for ${input.level.fullLabel}`,
-      subtitle: `Term ${input.term} • Quill Series`,
-      description: `A complete ${input.subject.name} textbook for ${input.level.fullLabel}, Term ${input.term}, aligned with the GES common curriculum.`,
-    };
-  } catch {
-    return {
-      title: `${input.subject.name} for ${input.level.fullLabel}`,
-      subtitle: `Term ${input.term} • Quill Series`,
-      description: `A complete ${input.subject.name} textbook for ${input.level.fullLabel}, Term ${input.term}.`,
-    };
+  } catch (err) {
+    console.error("[quill] book meta error:", err);
   }
+  return {
+    title: `${input.subject.name} for ${input.level.fullLabel}`,
+    subtitle: `Term ${input.term} • Quill Series`,
+    description: `A complete ${input.subject.name} textbook for ${input.level.fullLabel}.`,
+  };
 }
-
-// ---------------------------------------------------------------------------
-// Streaming generator — yields progress events as pages are produced
-// ---------------------------------------------------------------------------
 
 export async function* generateBook(
   input: GenerateBookInput,
   opts: { research?: boolean; signal?: AbortSignal; skipPages?: number } = {}
 ): AsyncGenerator<GenerateBookProgress> {
   const skipPages = opts.skipPages ?? 0;
-  // Compute condensing plan
-  const plan = input.targetPages
-    ? planCondensing(input.targetPages, input.topics)
-    : {
-        mode: "full" as GenerationMode,
-        lessonsToGenerate: input.lessons ?? Math.min(4, input.topics.length),
-        topicsToUse: input.topics.slice(0, input.lessons ?? Math.min(4, input.topics.length)),
-        pagesPerLesson: 3,
-        estimatedTotalPages: FIXED_PAGES + 3 * (input.lessons ?? Math.min(4, input.topics.length)),
-        description: `Full mode (default)`,
-      };
+  const topics = input.topics.slice(0, input.lessons ?? input.topics.length);
+  const systemPrompt = buildSystemPrompt(input.level, input.subject);
 
-  const systemPrompt = buildSystemPrompt(input.level, input.subject, plan.mode);
-  const topics = plan.topicsToUse;
+  let pageIndex = 0;
+  const shouldGen = () => pageIndex >= skipPages;
 
-  yield { type: "log", message: plan.description };
-
-  // Progress callback that yields log events
-  const onProgress = (msg: string) => {
-    // We can't yield from a callback, so we store the message for the next yield
-    pendingLog = msg;
-  };
-  let pendingLog: string | null = null;
-
-  const flushLog = function* () {
-    if (pendingLog) {
-      const msg = pendingLog;
-      pendingLog = null;
-      yield { type: "log" as const, message: msg };
-    }
-  };
-
-  // 1. Book meta — skip if resuming (already have it in DB)
+  // 1. Book meta
   if (skipPages === 0) {
     const meta = await generateBookMeta(input);
     yield { type: "book-meta", book: meta };
   }
 
-  let pageIndex = 0;
-
-  // Helper to generate a page and flush any pending logs
-  const genPage = async (
-    pageType: PageType,
-    pageTitle: string,
-    userPrompt: string
-  ): Promise<PageContent> => {
-    return generatePageJson(systemPrompt, userPrompt, input.level, onProgress);
-  };
-
-  // Helper: only generate if this page hasn't been generated yet (resume support)
-  const shouldGen = () => pageIndex >= skipPages;
-
   // 2. Cover
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "cover", pageTitle: "Cover" };
-    const cover = await genPage("cover", "Cover", buildCoverPrompt(input));
-    yield* flushLog();
+    const cover = await generatePageJson(systemPrompt, buildCoverPrompt(input), input.level);
     yield { type: "page-done", pageIndex, pageType: "cover", pageTitle: "Cover", page: cover };
   }
   pageIndex++;
@@ -648,81 +289,46 @@ export async function* generateBook(
   // 3. TOC
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "toc", pageTitle: "Table of Contents" };
-    const toc = await genPage("toc", "Table of Contents", buildTocPrompt(input, plan));
-    yield* flushLog();
+    const toc = await generatePageJson(systemPrompt, buildTocPrompt(input, topics), input.level);
     yield { type: "page-done", pageIndex, pageType: "toc", pageTitle: "Table of Contents", page: toc };
   }
   pageIndex++;
 
-  // 4. Lessons — grouped into sections if useSections is true
-  // Each section has ~3 lessons and gets its own divider page
-  const useSections = input.useSections ?? false;
-  const sectionSize = 3; // lessons per section
-  const sectionCount = useSections ? Math.ceil(topics.length / sectionSize) : 0;
-
+  // 4. Lessons
   for (let i = 0; i < topics.length; i++) {
     if (opts.signal?.aborted) return;
     const topic = topics[i];
     const lessonNum = i + 1;
 
-    // Insert section divider at the start of each section
-    if (useSections && i % sectionSize === 0) {
-      const sectionNum = Math.floor(i / sectionSize) + 1;
-      const sectionStart = i;
-      const sectionEnd = Math.min(i + sectionSize, topics.length);
-      const lessonsInSection = topics.slice(sectionStart, sectionEnd);
-      const sectionTitle = lessonsInSection.length === 1
-        ? lessonsInSection[0]
-        : `${lessonsInSection[0]} & Related Topics`;
-      const dividerTitle = `Section ${sectionNum}: ${sectionTitle}`;
-      if (shouldGen()) {
-        yield { type: "page-start", pageIndex, pageType: "section-divider", pageTitle: dividerTitle };
-        const divider = await genPage("section-divider", dividerTitle, buildSectionDividerPrompt(input, sectionNum, sectionTitle, lessonsInSection));
-        yield* flushLog();
-        yield { type: "page-done", pageIndex, pageType: "section-divider", pageTitle: dividerTitle, page: divider };
-      }
-      pageIndex++;
-    }
-
-    // Lesson page
+    // Lesson
     if (shouldGen()) {
       yield { type: "page-start", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}` };
-      const lesson = await genPage("lesson", `Lesson ${lessonNum}: ${topic}`, buildLessonPrompt(input, topic, lessonNum, "", plan.mode));
-      yield* flushLog();
+      const lesson = await generatePageJson(systemPrompt, buildLessonPrompt(input, topic, lessonNum), input.level);
       yield { type: "page-done", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}`, page: lesson };
     }
     pageIndex++;
 
-    // Skip exercise/homework in compact mode
-    if (plan.mode === "compact") continue;
-
-    // Exercise page
-    const exTitle = plan.mode === "condensed" ? `Practice & Homework ${lessonNum}` : `Exercise ${lessonNum}`;
+    // Exercise
     if (shouldGen()) {
-      yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: exTitle };
-      const exercise = await genPage("exercise", exTitle, buildExercisePrompt(input, topic, lessonNum, plan.mode));
-      yield* flushLog();
-      yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: exTitle, page: exercise };
+      yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: `Exercise ${lessonNum}` };
+      const exercise = await generatePageJson(systemPrompt, buildExercisePrompt(input, topic, lessonNum), input.level);
+      yield { type: "page-done", pageIndex, pageType: "exercise", pageTitle: `Exercise ${lessonNum}`, page: exercise };
     }
     pageIndex++;
 
-    // Homework page — only in full mode
-    if (plan.mode === "full") {
-      if (shouldGen()) {
-        yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
-        const hw = await genPage("homework", `Homework ${lessonNum}`, buildHomeworkPrompt(input, topic, lessonNum));
-        yield* flushLog();
-        yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
-      }
-      pageIndex++;
+    // Homework
+    if (shouldGen()) {
+      yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
+      const hw = await generatePageJson(systemPrompt, buildHomeworkPrompt(input, topic, lessonNum), input.level);
+      yield { type: "page-done", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}`, page: hw };
     }
+    pageIndex++;
   }
 
   // 5. Glossary
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "glossary", pageTitle: "Glossary" };
-    const glossary = await genPage("glossary", "Glossary", `Generate a GLOSSARY page for the ${input.subject.name} book. List 10-15 key terms covered across the lessons, each with a one-sentence meaning appropriate for ${input.level.fullLabel}. Use a "vocabulary" block. Return JSON for a PageContent with type: "glossary".`);
-    yield* flushLog();
+    const glossary = await generatePageJson(systemPrompt, buildGlossaryPrompt(input), input.level);
     yield { type: "page-done", pageIndex, pageType: "glossary", pageTitle: "Glossary", page: glossary };
   }
   pageIndex++;
@@ -730,11 +336,18 @@ export async function* generateBook(
   // 6. Closing
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "closing", pageTitle: "Well Done!" };
-    const closing = await genPage("closing", "Well Done!", buildClosingPrompt(input));
-    yield* flushLog();
+    const closing = await generatePageJson(systemPrompt, buildClosingPrompt(input), input.level);
     yield { type: "page-done", pageIndex, pageType: "closing", pageTitle: "Well Done!", page: closing };
   }
   pageIndex++;
 
-  yield { type: "complete", message: `Generated ${pageIndex} pages (${plan.mode} mode).` };
+  yield { type: "complete", message: `Generated ${pageIndex} pages.` };
+}
+
+// Condensing plan (kept for compatibility)
+export function planCondensing(targetPages: number, topics: string[]) {
+  const available = Math.max(0, targetPages - FIXED_PAGES);
+  if (available >= 3 * topics.length) return { mode: "full" as GenerationMode, lessonsToGenerate: topics.length, topicsToUse: topics, pagesPerLesson: 3, estimatedTotalPages: FIXED_PAGES + 3 * topics.length, description: "Full mode" };
+  if (available >= 2 * topics.length) return { mode: "condensed" as GenerationMode, lessonsToGenerate: topics.length, topicsToUse: topics, pagesPerLesson: 2, estimatedTotalPages: FIXED_PAGES + 2 * topics.length, description: "Condensed mode" };
+  return { mode: "compact" as GenerationMode, lessonsToGenerate: Math.max(1, available), topicsToUse: topics.slice(0, Math.max(1, available)), pagesPerLesson: 1, estimatedTotalPages: FIXED_PAGES + Math.max(1, available), description: "Compact mode" };
 }
