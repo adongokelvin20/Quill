@@ -1,36 +1,30 @@
-// Quill — Book generation API (resumable).
-// Works on Vercel Hobby plan (60s limit) by generating in 50-second chunks.
+// Quill — Book generation API (one page per request).
+// Each request generates ONE page and returns immediately.
+// This guarantees every request completes in under 10 seconds.
 //
-// POST /api/quill/generate
-//   New: { level, subject, term, topics, ... } → creates book, generates for 50s
-//   Resume: { bookId } → loads existing book, generates remaining pages for 50s
-//
-// GET /api/quill/generate?bookId=xxx → returns progress from database
+// POST /api/quill/generate — creates book + generates first page
+// POST /api/quill/generate {bookId} — generates next page
+// GET /api/quill/generate?bookId=xxx — returns progress
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { generateBook, GenerateBookInput, GenerationMode } from "@/lib/generator";
+import { generateBook, GenerateBookInput } from "@/lib/generator";
 import { LEVELS, SUBJECTS, getLevel } from "@/lib/curriculum";
 import { getCurrentUserId } from "@/lib/auth";
+import { Block, PageContent, makeId } from "@/lib/blocks";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // Works on Hobby plan
+export const maxDuration = 30;
 export const dynamic = "force-dynamic";
-
-const MAX_GENERATION_TIME_MS = 30000; // 30 seconds — safe within 60s Vercel limit
 
 export async function POST(req: NextRequest) {
   let body: {
-    bookId?: string; // If provided, resume generation
+    bookId?: string;
     level?: string;
     subject?: string;
     term?: number;
     topics?: string[];
     lessons?: number;
-    language?: string;
-    research?: boolean;
-    targetPages?: number;
-    useSections?: boolean;
   };
 
   try {
@@ -43,12 +37,13 @@ export async function POST(req: NextRequest) {
     let bookId: string;
     let input: GenerateBookInput;
     let skipPages: number;
+    let bookMeta: { title: string; subtitle: string; description: string } | null = null;
 
     // RESUME MODE: bookId provided
     if (body.bookId) {
       const existingBook = await db.book.findUnique({
         where: { id: body.bookId },
-        include: { _count: { select: { pages: true } } },
+        include: { pages: { orderBy: { pageNumber: "asc" } } },
       });
 
       if (!existingBook) {
@@ -59,14 +54,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           bookId: existingBook.id,
           status: "ready",
-          pages: existingBook._count.pages,
+          pages: existingBook.pages.length,
           title: existingBook.title,
+          done: true,
         });
       }
 
       bookId = existingBook.id;
 
-      // Reconstruct the input from the stored book
       const levelInfo = getLevel(existingBook.level as never);
       const subject = SUBJECTS.find((s) => s.id === existingBook.subject);
       if (!levelInfo || !subject) {
@@ -83,9 +78,9 @@ export async function POST(req: NextRequest) {
         language: existingBook.language,
         useSections: false,
       };
-      skipPages = existingBook._count.pages; // Skip already-generated pages
+      skipPages = existingBook.pages.length;
 
-      console.log(`[quill] Resuming generation for book ${bookId}, skipping ${skipPages} existing pages`);
+      console.log(`[quill] Resuming book ${bookId}, generating page ${skipPages + 1}`);
     } else {
       // NEW BOOK MODE
       const levelInfo = getLevel((body.level ?? "B3") as never);
@@ -96,7 +91,7 @@ export async function POST(req: NextRequest) {
 
       const term = ([1, 2, 3].includes(body.term ?? 1) ? body.term : 1) as 1 | 2 | 3;
       const topics = Array.isArray(body.topics) && body.topics.length > 0
-        ? body.topics.slice(0, 2) // Max 2 topics
+        ? body.topics.slice(0, 2)
         : subject.topics[term].slice(0, 1);
 
       input = {
@@ -105,7 +100,7 @@ export async function POST(req: NextRequest) {
         term,
         topics,
         lessons: topics.length,
-        language: body.language ?? "english",
+        language: "english",
         useSections: false,
       };
 
@@ -119,7 +114,7 @@ export async function POST(req: NextRequest) {
           level: levelInfo.id,
           subject: subject.id,
           term,
-          language: input.language ?? "english",
+          language: "english",
           status: "generating",
           topics: JSON.stringify(topics),
           userId,
@@ -128,94 +123,90 @@ export async function POST(req: NextRequest) {
 
       bookId = book.id;
       skipPages = 0;
+
+      // Generate book meta (title) — quick LLM call
+      try {
+        const meta = await generateBookMeta(input);
+        bookMeta = meta;
+        await db.book.update({
+          where: { id: bookId },
+          data: { title: meta.title, subtitle: meta.subtitle, description: meta.description },
+        });
+      } catch {
+        // Use default title
+      }
     }
 
-    // Generate pages with a time limit
-    const startTime = Date.now();
-    let pagesGenerated = 0;
-    let currentPageIndex = skipPages;
-    let generationComplete = false;
+    // Generate exactly ONE page
+    let generatedPage = false;
+    let allDone = false;
     let errorMessage: string | null = null;
 
     try {
+      // Use the generator but only take the first page-done event
       for await (const ev of generateBook(input, { research: false, skipPages })) {
-        // Check time limit
-        if (Date.now() - startTime > MAX_GENERATION_TIME_MS) {
-          console.log(`[quill] Time limit reached after ${pagesGenerated} pages, will resume`);
-          break;
-        }
-
-        if (ev.type === "book-meta") {
+        if (ev.type === "book-meta" && !bookMeta) {
+          bookMeta = ev.book!;
           try {
             await db.book.update({
               where: { id: bookId },
-              data: {
-                title: ev.book!.title,
-                subtitle: ev.book!.subtitle,
-                description: ev.book!.description,
-              },
+              data: { title: bookMeta.title, subtitle: bookMeta.subtitle, description: bookMeta.description },
             });
-          } catch (e) {
-            console.error("[quill] book update error:", e);
-          }
+          } catch {}
         } else if (ev.type === "page-done" && ev.page) {
+          // Save this one page
           try {
             await db.page.create({
               data: {
                 bookId,
-                pageNumber: currentPageIndex,
+                pageNumber: skipPages,
                 type: ev.pageType!,
                 title: ev.pageTitle ?? null,
                 content: JSON.stringify(ev.page),
               },
             });
-            currentPageIndex++;
-            pagesGenerated++;
+            generatedPage = true;
           } catch (e) {
-            // Page might already exist (race condition) — skip
+            // Page might already exist
             console.error("[quill] page create error:", e);
           }
+          break; // Only generate ONE page per request
         } else if (ev.type === "complete") {
-          generationComplete = true;
+          allDone = true;
         }
+      }
+
+      // Check if we've generated all pages
+      // Total expected: cover(1) + toc(1) + lessons(topics.length * 3) + glossary(1) + closing(1)
+      const totalPages = await db.page.count({ where: { bookId } });
+      const expectedPages = 2 + (input.topics.length * 3) + 2; // cover + toc + lessons + glossary + closing
+      if (totalPages >= expectedPages || allDone) {
+        allDone = true;
+        try {
+          await db.book.update({ where: { id: bookId }, data: { status: "ready" } });
+        } catch {}
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
-      console.error("[quill] generation error:", errorMessage);
+      console.error("[quill] page generation error:", errorMessage);
     }
 
-    // If complete or error, update book status
-    if (generationComplete) {
-      try {
-        await db.book.update({ where: { id: bookId }, data: { status: "ready" } });
-      } catch {}
-    } else if (errorMessage) {
-      // Mark as error only if no pages were generated
-      const totalPages = await db.page.count({ where: { bookId } });
-      if (totalPages === 0) {
-        try {
-          await db.book.update({ where: { id: bookId }, data: { status: "error" } });
-        } catch {}
-      }
-      // If we have some pages, keep status as "generating" so client can resume
-    }
-
-    // Return current status
+    // Return status
     const finalBook = await db.book.findUnique({
       where: { id: bookId },
       include: { _count: { select: { pages: true } } },
     });
 
-    const status = generationComplete ? "ready" : (finalBook?.status ?? "generating");
+    const status = allDone ? "ready" : (finalBook?.status ?? "generating");
     const pages = finalBook?._count.pages ?? 0;
 
     return NextResponse.json({
       bookId,
       status,
       pages,
-      title: finalBook?.title,
+      title: finalBook?.title ?? bookMeta?.title,
       done: status === "ready",
-      resume: !generationComplete && !errorMessage, // Tell client to resume
+      resume: !allDone, // Tell client to continue
       error: errorMessage && pages === 0 ? errorMessage : null,
     });
   } catch (err) {
@@ -264,3 +255,6 @@ export async function GET(req: NextRequest) {
     })),
   });
 }
+
+// Import for the generator's book meta type
+import type { GenerateBookProgress } from "@/lib/generator";

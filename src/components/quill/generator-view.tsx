@@ -176,27 +176,26 @@ export function GeneratorView() {
 
     let currentBookId: string | null = null;
     let attempt = 0;
-    const maxAttempts = 10; // Max resume attempts (10 × 50s = ~8 min total)
+    const maxAttempts = 30; // Max pages to generate (30 × 10s = 5 min)
 
     try {
-      // Loop: generate → check status → resume if needed
       while (attempt < maxAttempts) {
         attempt++;
 
-        // Step 1: Call generate (new or resume)
-        // Use AbortController with 40s timeout (Vercel Hobby is 60s, we use 30s on server)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 40000);
+        let data: { bookId?: string; status?: string; pages?: number; title?: string; done?: boolean; resume?: boolean; error?: string } = {};
 
-        let res: Response;
         try {
-          res = await fetch("/api/quill/generate", {
+          // Short timeout — each request should complete in under 15s
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+          const res = await fetch("/api/quill/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(
               currentBookId
-                ? { bookId: currentBookId } // Resume
-                : { // New
+                ? { bookId: currentBookId }
+                : {
                     level,
                     subject,
                     term,
@@ -208,44 +207,71 @@ export function GeneratorView() {
             ),
             signal: controller.signal,
           });
-        } catch (fetchErr) {
+
           clearTimeout(timeoutId);
-          // If fetch failed (timeout), but we have a bookId, try to resume
-          if (currentBookId) {
-            console.log("Fetch failed, trying to resume...");
-            await new Promise((r) => setTimeout(r, 2000));
-            continue;
+
+          if (!res.ok) {
+            let errorMsg = `HTTP ${res.status}`;
+            try {
+              const errData = await res.json();
+              if (errData.error) errorMsg = errData.error;
+            } catch {}
+            // If we have a bookId, try to resume instead of failing
+            if (currentBookId) {
+              console.log(`Error ${res.status}, trying to resume...`);
+              await new Promise((r) => setTimeout(r, 1000));
+              continue;
+            }
+            throw new Error(errorMsg);
           }
-          throw new Error("Connection failed. Please try again.");
+
+          data = await res.json();
+        } catch (fetchErr) {
+          // Fetch failed (timeout or network error)
+          // If we have a bookId, check status via GET and resume
+          if (currentBookId) {
+            console.log(`Fetch failed on attempt ${attempt}, checking status...`);
+            try {
+              const statusRes = await fetch(`/api/quill/generate?bookId=${currentBookId}`, {
+                signal: AbortSignal.timeout(5000),
+              });
+              const status = await statusRes.json();
+              data = { bookId: currentBookId, ...status };
+
+              // If book is ready, we're done
+              if (status.done && status.pages > 0) {
+                data.done = true;
+                data.status = "ready";
+              }
+            } catch {
+              // Can't even check status — wait and retry
+              await new Promise((r) => setTimeout(r, 2000));
+              continue;
+            }
+          } else {
+            // No bookId yet — first request failed
+            throw new Error("Could not connect to the server. Please try again.");
+          }
         }
-        clearTimeout(timeoutId);
 
-        if (!res.ok) {
-          let errorMsg = `HTTP ${res.status}`;
-          try {
-            const errData = await res.json();
-            if (errData.error) errorMsg = errData.error;
-          } catch {}
-          throw new Error(errorMsg);
+        // Update state with response
+        if (data.bookId) {
+          currentBookId = data.bookId;
+          setBookId(currentBookId);
         }
-
-        const data = await res.json();
-        currentBookId = data.bookId;
-        setBookId(currentBookId);
-
         if (data.title) {
           setBookMeta({ title: data.title, subtitle: "", description: "" });
         }
 
-        // Update progress
         const pageCount = data.pages || 0;
-        setProgress({ message: `Generated ${pageCount} pages...`, totalPages: pageCount });
-        // Update page list
-        const pages = [];
-        for (let i = 0; i < pageCount; i++) {
-          pages.push({ pageIndex: i, pageType: "generated", pageTitle: `Page ${i + 1}` });
+        if (pageCount > 0) {
+          setProgress({ message: `Generated ${pageCount} pages...`, totalPages: pageCount });
+          const pages = [];
+          for (let i = 0; i < pageCount; i++) {
+            pages.push({ pageIndex: i, pageType: "generated", pageTitle: `Page ${i + 1}` });
+          }
+          setGeneratedPages(pages);
         }
-        setGeneratedPages(pages);
 
         // Check if done
         if (data.done || data.status === "ready") {
@@ -253,40 +279,45 @@ export function GeneratorView() {
             setProgress({ message: `Book ready! ${pageCount} pages generated.`, totalPages: pageCount });
             toast.success("Book generated!", { description: `${pageCount} pages created. Opening editor...` });
             setTimeout(() => openEditor(currentBookId!), 1500);
+            return;
           } else {
             throw new Error("Generation produced no pages.");
           }
-          return;
         }
 
-        if (data.error) {
+        if (data.error && pageCount === 0) {
           throw new Error(data.error);
         }
 
-        // If not done and resume is needed, wait 2 seconds and loop again
+        // If resume is needed, wait 500ms and continue
         if (data.resume || data.status === "generating") {
-          setProgress({ message: `Generated ${pageCount} pages. Continuing... (attempt ${attempt})` });
-          await new Promise((r) => setTimeout(r, 2000));
+          setProgress({ message: `Generated ${pageCount} pages. Generating next page... (${attempt})` });
+          await new Promise((r) => setTimeout(r, 500));
           continue;
         }
 
-        // Unknown state — break
+        // Unknown state — check if we have pages and open editor
+        if (pageCount > 0) {
+          setProgress({ message: `Book ready! ${pageCount} pages generated.`, totalPages: pageCount });
+          toast.success("Book generated!", { description: `${pageCount} pages created. Opening editor...` });
+          setTimeout(() => openEditor(currentBookId!), 1500);
+          return;
+        }
+
         break;
       }
 
-      if (attempt >= maxAttempts) {
-        // Check final status
-        if (currentBookId) {
-          const statusRes = await fetch(`/api/quill/generate?bookId=${currentBookId}`);
-          const status = await statusRes.json();
-          if (status.pages > 0) {
-            toast.success("Book generated!", { description: `${status.pages} pages created. Opening editor...` });
-            setTimeout(() => openEditor(currentBookId!), 1500);
-            return;
-          }
+      // Max attempts reached — check if we have any pages
+      if (currentBookId) {
+        const statusRes = await fetch(`/api/quill/generate?bookId=${currentBookId}`);
+        const status = await statusRes.json();
+        if (status.pages > 0) {
+          toast.success("Book generated!", { description: `${status.pages} pages created. Opening editor...` });
+          setTimeout(() => openEditor(currentBookId!), 1500);
+          return;
         }
-        throw new Error("Generation timed out after multiple attempts. Please try again.");
       }
+      throw new Error("Generation timed out. Please try again.");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       toast.error("Generation failed", { description: message });
@@ -296,7 +327,6 @@ export function GeneratorView() {
     }
   };
 
-  // Unused
   const handleSSE = (_event: string, _data: Record<string, unknown>) => {};
 
   return (
