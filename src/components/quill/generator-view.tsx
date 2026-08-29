@@ -185,9 +185,10 @@ export function GeneratorView() {
         let data: { bookId?: string; status?: string; pages?: number; title?: string; done?: boolean; resume?: boolean; error?: string } = {};
 
         try {
-          // Short timeout — each request should complete in under 15s
+          // Short timeout — each request should complete in under 25s
+          // (10s generation + 5s cold start + 10s buffer)
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15000);
+          const timeoutId = setTimeout(() => controller.abort(), 25000);
 
           const res = await fetch("/api/quill/generate", {
             method: "POST",
