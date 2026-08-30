@@ -29,7 +29,7 @@ export async function callLLM(
 
   const body: any = {
     contents,
-    generationConfig: { temperature, maxOutputTokens: maxTokens },
+    generationConfig: { temperature, maxOutputTokens: maxTokens + 1000 },
   };
   if (systemMsg) {
     body.systemInstruction = { parts: [{ text: systemMsg }] };

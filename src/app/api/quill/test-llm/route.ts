@@ -23,7 +23,7 @@ export async function GET() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: "Say hello" }] }],
-          generationConfig: { maxOutputTokens: 20 },
+          generationConfig: { maxOutputTokens: 100 },
         }),
         signal: controller.signal,
       }
