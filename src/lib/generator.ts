@@ -1,26 +1,33 @@
 // Quill — Book content generator.
-// Uses z-ai-web-dev-sdk with config passed DIRECTLY (no file loading).
+// Uses direct fetch() to Z.ai API — no SDK, no config file, works everywhere.
 
-import ZAI from "z-ai-web-dev-sdk";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
 
-// Hardcoded config — same as .z-ai-config file but passed directly to constructor
-const ZAI_CONFIG = {
-  baseUrl: "https://internal-api.z.ai/v1",
-  apiKey: "Z.ai",
-  chatId: "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
-  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE",
-  userId: "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+// Z.ai API credentials and helper
+const ZAI_BASE = "https://internal-api.z.ai/v1";
+const ZAI_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE";
+const ZAI_HEADERS: Record<string, string> = {
+  "Content-Type": "application/json",
+  "Authorization": "Bearer Z.ai",
+  "X-Z-AI-From": "Z",
+  "X-Chat-Id": "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+  "X-User-Id": "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+  "X-Token": ZAI_TOKEN,
 };
 
-// Create ZAI instance with config passed DIRECTLY — bypasses file loading entirely
-let zaiInstance: any = null;
-async function getZai() {
-  if (!zaiInstance) {
-    zaiInstance = new ZAI(ZAI_CONFIG);
+async function callLLM(messages: { role: string; content: string }[], maxTokens = 2000, temperature = 0.7): Promise<string> {
+  const res = await fetch(`${ZAI_BASE}/chat/completions`, {
+    method: "POST",
+    headers: ZAI_HEADERS,
+    body: JSON.stringify({ messages, temperature, max_tokens: maxTokens }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Z.ai API ${res.status}: ${text.slice(0, 100)}`);
   }
-  return zaiInstance;
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 export type GenerationMode = "full" | "condensed" | "compact";
@@ -171,16 +178,14 @@ Return JSON with type: "closing".`;
 async function generatePageJson(systemPrompt: string, userPrompt: string, level: LevelInfo): Promise<PageContent> {
   const tryOnce = async (): Promise<PageContent | null> => {
     try {
-      const zai = await getZai();
-      const res = await zai.chat.completions.create({
-        messages: [
+      const raw = await callLLM(
+        [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        temperature: level.complexity <= 2 ? 0.8 : 0.6,
-        max_tokens: 2000,
-      });
-      const raw = res.choices?.[0]?.message?.content ?? "";
+        2000,
+        level.complexity <= 2 ? 0.8 : 0.6
+      );
       if (!raw || raw.trim().length < 10) return null;
       return parsePageJson(raw);
     } catch (err) {
@@ -191,18 +196,15 @@ async function generatePageJson(systemPrompt: string, userPrompt: string, level:
 
   let page = await tryOnce();
   if (!page) {
-    // Retry with simpler prompt
     try {
-      const zai = await getZai();
-      const res = await zai.chat.completions.create({
-        messages: [
+      const raw = await callLLM(
+        [
           { role: "system", content: "Output valid JSON only. No markdown." },
           { role: "user", content: userPrompt.slice(0, 500) },
         ],
-        temperature: 0.3,
-        max_tokens: 1500,
-      });
-      const raw = res.choices?.[0]?.message?.content ?? "";
+        1500,
+        0.3
+      );
       page = parsePageJson(raw);
     } catch {}
   }
@@ -263,16 +265,14 @@ function sanitisePage(page: PageContent): PageContent {
 
 export async function generateBookMeta(input: GenerateBookInput): Promise<{ title: string; subtitle: string; description: string }> {
   try {
-    const zai = await getZai();
-    const res = await zai.chat.completions.create({
-      messages: [
+    const raw = await callLLM(
+      [
         { role: "system", content: "Output a JSON object only." },
         { role: "user", content: `Suggest a title, subtitle, and description for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}. Return JSON: { "title": string, "subtitle": string, "description": string }` },
       ],
-      temperature: 0.7,
-      max_tokens: 300,
-    });
-    const raw = res.choices?.[0]?.message?.content ?? "";
+      300,
+      0.7
+    );
     let txt = raw.trim();
     if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
     const start = txt.indexOf("{");

@@ -1,5 +1,6 @@
 // Quill — File download API.
 // GET /api/quill/download?file=/path/to/file.docx
+// Serves files from /tmp (Vercel writable directory).
 
 import { NextRequest } from "next/server";
 import { promises as fs } from "fs";
@@ -8,15 +9,14 @@ import path from "path";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ALLOWED_BASE = "/home/z/my-project/download";
-
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const file = url.searchParams.get("file");
   if (!file) return new Response("Missing file", { status: 400 });
 
   const resolved = path.resolve(file);
-  if (!resolved.startsWith(ALLOWED_BASE)) {
+  // Allow files from /tmp (Vercel) or /home/z (local dev)
+  if (!resolved.startsWith("/tmp") && !resolved.startsWith("/home/z/my-project/download")) {
     return new Response("Forbidden", { status: 403 });
   }
 

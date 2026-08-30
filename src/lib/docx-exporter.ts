@@ -709,7 +709,7 @@ export async function exportBookToDocx(bookId: string): Promise<{ filePath: stri
   });
 
   const buffer = await Packer.toBuffer(doc);
-  const dir = path.join("/home/z/my-project/download", "quill");
+  const dir = path.join("/tmp", "quill-exports");
   await fs.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, `${bookId}.docx`);
   await fs.writeFile(filePath, buffer);
