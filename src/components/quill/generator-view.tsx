@@ -183,7 +183,7 @@ export function GeneratorView() {
 
     let currentBookId: string | null = null;
     let attempt = 0;
-    const maxAttempts = 20;
+    const maxAttempts = 30; // Max pages (30 pages × ~25s = ~12 min)
 
     try {
       while (attempt < maxAttempts) {
@@ -205,7 +205,7 @@ export function GeneratorView() {
                     subject,
                     term,
                     topics: topicsToUse,
-                    lessons: 1,
+                    lessons: topicsToUse.length,
                     research: false,
                     useSections: false,
                   }

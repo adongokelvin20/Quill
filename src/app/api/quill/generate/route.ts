@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
 
       const term = ([1, 2, 3].includes(body.term ?? 1) ? body.term : 1) as 1 | 2 | 3;
       const topics = Array.isArray(body.topics) && body.topics.length > 0
-        ? body.topics.slice(0, 2)
+        ? body.topics.slice(0, 5)  // Allow up to 5 topics
         : subject.topics[term].slice(0, 1);
 
       input = {
