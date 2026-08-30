@@ -188,6 +188,10 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
+      // Make 429 errors more helpful
+      if (errorMessage.includes("429")) {
+        errorMessage = "Gemini API quota exceeded. The free tier limits reset daily. To generate more books today, create a new API key from a different Google account at https://aistudio.google.com/apikey and update GEMINI_API_KEY in Vercel Settings.";
+      }
       console.error("[quill] page generation error:", errorMessage);
     }
 
