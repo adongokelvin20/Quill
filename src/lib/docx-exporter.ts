@@ -715,14 +715,92 @@ export async function exportBookToDocx(bookId: string): Promise<{ filePath: stri
   await fs.writeFile(filePath, buffer);
 
   // Record the export
-  await db.bookExport.create({
-    data: {
-      bookId,
-      format: "docx",
-      filePath,
-      fileSize: buffer.length,
-    },
-  });
+  try {
+    await db.bookExport.create({
+      data: {
+        bookId,
+        format: "docx",
+        filePath,
+        fileSize: buffer.length,
+      },
+    });
+  } catch {}
 
   return { filePath, fileSize: buffer.length };
+}
+
+// Build the docx Document object for a book (without saving to disk).
+// Used by the export API to return the file directly in the HTTP response.
+export async function buildDocForBook(bookId: string): Promise<Document> {
+  const book = await db.book.findUnique({
+    where: { id: bookId },
+    include: { pages: { orderBy: { pageNumber: "asc" } } },
+  });
+  if (!book) throw new Error("Book not found");
+
+  const { getLevel } = await import("@/lib/curriculum");
+  const level = getLevel(book.level as never);
+  const fonts = pickFonts(level);
+
+  const coverPage = book.pages.find((p) => p.type === "cover");
+  const otherPages = book.pages.filter((p) => p.type !== "cover");
+
+  const sections = [];
+
+  if (coverPage) {
+    const coverChildren = await pageToDocxChildren(coverPage, level, fonts, true);
+    sections.push({
+      properties: {
+        page: {
+          size: { width: convertMillimetersToTwip(210), height: convertMillimetersToTwip(297) },
+          margin: {
+            top: convertMillimetersToTwip(15),
+            bottom: convertMillimetersToTwip(15),
+            left: convertMillimetersToTwip(18),
+            right: convertMillimetersToTwip(18),
+          },
+        },
+      },
+      children: coverChildren,
+    });
+  }
+
+  const allChildren: (Paragraph | Table)[] = [];
+  for (let i = 0; i < otherPages.length; i++) {
+    const page = otherPages[i];
+    if (i > 0) {
+      allChildren.push(new Paragraph({ children: [new TextRun({ text: "", break: 1 })], pageBreakBefore: true }));
+    }
+    const children = await pageToDocxChildren(page, level, fonts, false);
+    allChildren.push(...children);
+  }
+
+  sections.push({
+    properties: {
+      page: {
+        size: { width: convertMillimetersToTwip(210), height: convertMillimetersToTwip(297) },
+        margin: {
+          top: convertMillimetersToTwip(15),
+          bottom: convertMillimetersToTwip(15),
+          left: convertMillimetersToTwip(18),
+          right: convertMillimetersToTwip(18),
+        },
+      },
+    },
+    children: allChildren,
+  });
+
+  return new Document({
+    creator: "Quill",
+    title: book.title,
+    description: book.description ?? "",
+    sections: sections as never,
+    styles: {
+      default: {
+        document: {
+          run: { font: fonts.body, size: level.bodyFontSize * 2 },
+        },
+      },
+    },
+  });
 }

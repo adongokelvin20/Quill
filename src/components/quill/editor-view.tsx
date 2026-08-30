@@ -155,22 +155,35 @@ export function EditorView() {
     }
     setExporting(true);
     try {
+      // The export API now returns the file directly as a blob
       const res = await fetch("/api/quill/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookId: book.id }),
       });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error ?? "Export failed");
-      const url = `/api/quill/download?file=${encodeURIComponent(data.filePath)}`;
+
+      if (!res.ok) {
+        let errorMsg = "Export failed";
+        try {
+          const errData = await res.json();
+          if (errData.error) errorMsg = errData.error;
+        } catch {}
+        throw new Error(errorMsg);
+      }
+
+      // Get the file as a blob and trigger download
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = data.filePath.split("/").pop() ?? "book.docx";
+      a.download = `${book.title.replace(/[^a-zA-Z0-9]/g, "_")}.docx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
-      toast.success("DOCX exported!", {
-        description: `${(data.fileSize / 1024).toFixed(0)} KB downloaded.`,
+      window.URL.revokeObjectURL(url);
+
+      toast.success("DOCX downloaded!", {
+        description: `${(blob.size / 1024).toFixed(0)} KB`,
       });
     } catch (err) {
       toast.error("Export failed", { description: String(err) });

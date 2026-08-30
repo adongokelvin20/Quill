@@ -91,21 +91,29 @@ export function LibraryView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookId: id }),
       });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error ?? "Export failed");
 
-      // Trigger download
-      const file = data.filePath as string;
-      const url = `/api/quill/download?file=${encodeURIComponent(file)}`;
+      if (!res.ok) {
+        let errorMsg = "Export failed";
+        try {
+          const errData = await res.json();
+          if (errData.error) errorMsg = errData.error;
+        } catch {}
+        throw new Error(errorMsg);
+      }
+
+      // Get the file as a blob and trigger download
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = file.split("/").pop() ?? "book.docx";
+      a.download = `quill-book.docx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
+      window.URL.revokeObjectURL(url);
 
-      toast.success("DOCX exported!", {
-        description: `${(data.fileSize / 1024).toFixed(0)} KB — check your downloads.`,
+      toast.success("DOCX downloaded!", {
+        description: `${(blob.size / 1024).toFixed(0)} KB`,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

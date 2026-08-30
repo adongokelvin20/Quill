@@ -1,14 +1,17 @@
 // Quill — DOCX export API.
-// POST /api/quill/export  { bookId }
-// Verifies the book belongs to the current user before exporting.
+// Returns the DOCX file directly as a download (no disk storage needed).
+// This works on Vercel because the file is returned in the HTTP response,
+// not saved to disk (which doesn't persist across serverless instances).
 
 import { NextRequest, NextResponse } from "next/server";
-import { exportBookToDocx } from "@/lib/docx-exporter";
 import { getCurrentUserId } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { Packer } from "docx";
+// Import the document builder function directly
+import { buildDocForBook } from "@/lib/docx-exporter";
 
 export const runtime = "nodejs";
-export const maxDuration = 180; // 3 minutes — image-heavy export can take a while
+export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
@@ -17,14 +20,25 @@ export async function POST(req: NextRequest) {
   if (!bookId) return NextResponse.json({ error: "bookId is required" }, { status: 400 });
 
   const userId = await getCurrentUserId(req);
-  const book = await db.book.findUnique({ where: { id: bookId }, select: { userId: true } });
+  const book = await db.book.findUnique({ where: { id: bookId }, select: { userId: true, title: true } });
   if (!book || book.userId !== userId) {
     return NextResponse.json({ error: "Book not found" }, { status: 404 });
   }
 
   try {
-    const result = await exportBookToDocx(bookId);
-    return NextResponse.json({ ok: true, ...result });
+    // Build the document and return it directly as a response
+    const doc = await buildDocForBook(bookId);
+    const buffer = await Packer.toBuffer(doc);
+
+    // Return the file directly as a download
+    const filename = `${book.title.replace(/[^a-zA-Z0-9]/g, "_")}.docx`;
+    return new Response(new Uint8Array(buffer), {
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "Content-Length": String(buffer.length),
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[quill] export failed:", message);
