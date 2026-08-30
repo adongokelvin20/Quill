@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { callLLM } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,38 +11,47 @@ export async function GET() {
     return NextResponse.json({ success: false, error: "GEMINI_API_KEY not set" });
   }
 
-  // Test direct Gemini API call with full error details
-  try {
-    const body = {
-      contents: [{ role: "user", parts: [{ text: "Say hello" }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 50 },
-    };
+  // Try each model individually
+  const MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-flash-latest", "gemini-pro"];
+  const results = [];
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
-    
-    const startTime = Date.now();
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const elapsed = Date.now() - startTime;
+  for (const model of MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: "Say hello" }] }],
+          generationConfig: { maxOutputTokens: 20 },
+        }),
+      });
 
-    const responseText = await res.text();
+      const text = await res.text();
+      results.push({
+        model,
+        status: res.status,
+        ok: res.ok,
+        response: text.slice(0, 200),
+      });
 
-    return NextResponse.json({
-      success: res.ok,
-      status: res.status,
-      elapsedMs: elapsed,
-      keyPreview: GEMINI_KEY.slice(0, 10) + "...",
-      response: responseText.slice(0, 500),
-    });
-  } catch (err: any) {
-    return NextResponse.json({
-      success: false,
-      error: err?.message ?? String(err),
-      code: err?.code,
-      cause: err?.cause?.message,
-    });
+      if (res.ok) break; // Found a working model
+    } catch (e: any) {
+      results.push({ model, error: e?.message ?? String(e) });
+    }
   }
+
+  // Also test the full callLLM function
+  let llmResult = "";
+  try {
+    llmResult = await callLLM([{ role: "user", content: "Say hello" }], 50, 0.7);
+  } catch (e: any) {
+    llmResult = "ERROR: " + (e?.message ?? String(e));
+  }
+
+  return NextResponse.json({
+    keyPreview: GEMINI_KEY.slice(0, 10) + "...",
+    models: results,
+    callLLMResult: llmResult.slice(0, 200),
+  });
 }
