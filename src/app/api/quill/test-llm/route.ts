@@ -14,7 +14,7 @@ export async function GET() {
   // Just try gemini-3.6-flash with a short timeout
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 30000);
     
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${GEMINI_KEY}`,
@@ -23,7 +23,7 @@ export async function GET() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: "Say hello" }] }],
-          generationConfig: { maxOutputTokens: 100 },
+          generationConfig: { maxOutputTokens: 500 },
         }),
         signal: controller.signal,
       }
