@@ -1,46 +1,43 @@
-// Test endpoint — checks if Z.ai API is reachable from the server
+// Test endpoint — checks if Z.ai SDK works
 import { NextResponse } from "next/server";
+import ZAI from "z-ai-web-dev-sdk";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const ZAI_BASE = "https://internal-api.z.ai/v1";
-  const ZAI_HEADERS: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer Z.ai",
-    "X-Z-AI-From": "Z",
-    "X-Chat-Id": "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
-    "X-User-Id": "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
-    "X-Token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE",
-  };
+  const configPath = join(process.cwd(), ".z-ai-config");
+  const configExists = existsSync(configPath);
+  let configContent = "";
+  if (configExists) {
+    try { configContent = readFileSync(configPath, "utf-8").slice(0, 100); } catch {}
+  }
 
   try {
     const startTime = Date.now();
-    const res = await fetch(`${ZAI_BASE}/chat/completions`, {
-      method: "POST",
-      headers: ZAI_HEADERS,
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "Say hello" }],
-        max_tokens: 20,
-      }),
+    const zai = await ZAI.create();
+    const res = await zai.chat.completions.create({
+      messages: [{ role: "user", content: "Say hello" }],
+      max_tokens: 20,
     });
-
     const elapsed = Date.now() - startTime;
-    const status = res.status;
-    const text = await res.text();
-
     return NextResponse.json({
-      success: res.ok,
-      status,
+      success: true,
+      configExists,
+      configPreview: configContent,
+      cwd: process.cwd(),
+      response: res.choices?.[0]?.message?.content ?? "",
       elapsedMs: elapsed,
-      response: text.slice(0, 500),
     });
   } catch (err: any) {
     return NextResponse.json({
       success: false,
+      configExists,
+      configPreview: configContent,
+      cwd: process.cwd(),
       error: err?.message ?? String(err),
-      code: err?.code ?? "unknown",
     });
   }
 }
