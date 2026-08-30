@@ -4,19 +4,19 @@
   "regions": ["iad1"],
   "functions": {
     "src/app/api/quill/generate/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 60
     },
     "src/app/api/quill/export/route.ts": {
-      "maxDuration": 180
+      "maxDuration": 60
     },
     "src/app/api/quill/img/route.ts": {
       "maxDuration": 30
     },
     "src/app/api/quill/image/route.ts": {
-      "maxDuration": 120
+      "maxDuration": 30
     },
     "src/app/api/quill/research/route.ts": {
-      "maxDuration": 60
+      "maxDuration": 30
     },
     "src/app/api/auth/[...nextauth]/route.ts": {
       "maxDuration": 30
@@ -25,5 +25,5 @@
       "maxDuration": 30
     }
   },
-  "buildCommand": "prisma generate && prisma db push && next build"
+  "buildCommand": "prisma generate && prisma db push && next build && cp .z-ai-config .next/standalone/ 2>/dev/null; true"
 }
