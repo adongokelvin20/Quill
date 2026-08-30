@@ -1,8 +1,8 @@
 // Quill — Book content generator.
-// Uses direct Z.ai API calls (no SDK, no config file).
-// Generates text content first; images are lazy-loaded by the browser.
+// Uses z-ai-web-dev-sdk with guaranteed config file availability.
 
-import { createChatCompletion } from "@/lib/zai-direct";
+import "@/lib/zai-config"; // MUST be first — writes config file before SDK loads
+import ZAI from "z-ai-web-dev-sdk";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
 
@@ -34,6 +34,15 @@ const FIXED_PAGES = 4;
 
 const GLOBAL_ILLUSTRATION_MODIFIERS =
   "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, well composed single focal point, neat and organized layout, no text, no watermark, no signature, no border";
+
+// Cache the ZAI instance
+let zaiInstance: any = null;
+async function getZai() {
+  if (!zaiInstance) {
+    zaiInstance = await ZAI.create();
+  }
+  return zaiInstance;
+}
 
 function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo): string {
   const isKG = level.complexity <= 1;
@@ -70,24 +79,22 @@ Valid block types:
 - tip { type, title?, text }
 - homework { type, title, instructions, items: string[] }
 
-For images: url must be "PLACEHOLDER". Write detailed alt text describing the illustration.
+For images: url must be "PLACEHOLDER". Write detailed alt text.
 
-AUDIENCE: ${level.fullLabel} (ages ${level.ageRange}, complexity ${level.complexity}/5)
-${isKG ? "KG: very short sentences (3-7 words). Picture-heavy. Always include 1-2 image blocks." : ""}
+AUDIENCE: ${level.fullLabel} (ages ${level.ageRange})
+${isKG ? "KG: very short sentences (3-7 words). Picture-heavy. Include 1-2 image blocks." : ""}
 ${isLower ? "Lower basic: short sentences (5-10 words). Include 1 image block." : ""}
-${isUpper ? "Upper basic/JHS: paragraphs of 3-5 sentences. Include diagrams/tables." : ""}
+${isUpper ? "Upper basic/JHS: paragraphs of 3-5 sentences." : ""}
 
-CULTURAL CONTEXT: Use Ghanaian names (Kwame, Ama, Kofi), Cedi (GH₵), local foods, festivals.
+CULTURAL CONTEXT: Use Ghanaian names, Cedi (GH₵), local foods, festivals.
 
-OUTPUT: Only valid JSON. No markdown fences, no explanation.
-
-CRITICAL: Return valid JSON only. Start with { and end with }.`;
+OUTPUT: Only valid JSON. No markdown fences. Start with { and end with }.`;
 }
 
 function buildCoverPrompt(input: GenerateBookInput): string {
   return `Generate a COVER page for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}.
 
-Include: heading (catchy title), subheading ("Term ${input.term} • Quill Series"), paragraph (short description), image block (alt: "colourful illustration of Ghanaian children learning ${input.subject.name}"), paragraph ("Name: ___________  Class: ___________"), divider, paragraph ("Quill — Bringing intelligent education to life").
+Include: heading (catchy title), subheading ("Term ${input.term} • Quill Series"), paragraph (short description), image block, paragraph ("Name: ___________  Class: ___________"), divider, paragraph ("Quill — Bringing intelligent education to life").
 
 Return JSON with type: "cover".`;
 }
@@ -153,9 +160,10 @@ Return JSON with type: "closing".`;
 }
 
 async function generatePageJson(systemPrompt: string, userPrompt: string, level: LevelInfo): Promise<PageContent> {
-  const tryOnce = async (attempt: number): Promise<PageContent | null> => {
+  const tryOnce = async (): Promise<PageContent | null> => {
     try {
-      const raw = await createChatCompletion({
+      const zai = await getZai();
+      const res = await zai.chat.completions.create({
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -163,21 +171,33 @@ async function generatePageJson(systemPrompt: string, userPrompt: string, level:
         temperature: level.complexity <= 2 ? 0.8 : 0.6,
         max_tokens: 2000,
       });
-
+      const raw = res.choices?.[0]?.message?.content ?? "";
       if (!raw || raw.trim().length < 10) return null;
       return parsePageJson(raw);
     } catch (err) {
-      console.error(`[quill] generatePageJson attempt ${attempt} error:`, err);
+      console.error("[quill] LLM error:", err);
       return null;
     }
   };
 
-  let page = await tryOnce(1);
+  let page = await tryOnce();
   if (!page) {
-    page = await tryOnce(2);
+    // Retry with simpler prompt
+    try {
+      const zai = await getZai();
+      const res = await zai.chat.completions.create({
+        messages: [
+          { role: "system", content: "Output valid JSON only. No markdown." },
+          { role: "user", content: userPrompt.slice(0, 500) },
+        ],
+        temperature: 0.3,
+        max_tokens: 1500,
+      });
+      const raw = res.choices?.[0]?.message?.content ?? "";
+      page = parsePageJson(raw);
+    } catch {}
   }
   if (!page) {
-    // Fallback
     page = {
       type: "lesson",
       title: "Lesson",
@@ -234,15 +254,16 @@ function sanitisePage(page: PageContent): PageContent {
 
 export async function generateBookMeta(input: GenerateBookInput): Promise<{ title: string; subtitle: string; description: string }> {
   try {
-    const raw = await createChatCompletion({
+    const zai = await getZai();
+    const res = await zai.chat.completions.create({
       messages: [
-        { role: "system", content: "Output a JSON object only. No markdown." },
-        { role: "user", content: `Suggest a title, subtitle, and description for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}. Topics: ${input.topics.slice(0, 3).join(", ")}. Return JSON: { "title": string, "subtitle": string, "description": string }` },
+        { role: "system", content: "Output a JSON object only." },
+        { role: "user", content: `Suggest a title, subtitle, and description for a ${input.level.fullLabel} ${input.subject.name} textbook, Term ${input.term}. Return JSON: { "title": string, "subtitle": string, "description": string }` },
       ],
       temperature: 0.7,
       max_tokens: 300,
     });
-
+    const raw = res.choices?.[0]?.message?.content ?? "";
     let txt = raw.trim();
     if (txt.startsWith("```")) txt = txt.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
     const start = txt.indexOf("{");
@@ -272,13 +293,12 @@ export async function* generateBook(
   let pageIndex = 0;
   const shouldGen = () => pageIndex >= skipPages;
 
-  // 1. Book meta
   if (skipPages === 0) {
     const meta = await generateBookMeta(input);
     yield { type: "book-meta", book: meta };
   }
 
-  // 2. Cover
+  // Cover
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "cover", pageTitle: "Cover" };
     const cover = await generatePageJson(systemPrompt, buildCoverPrompt(input), input.level);
@@ -286,7 +306,7 @@ export async function* generateBook(
   }
   pageIndex++;
 
-  // 3. TOC
+  // TOC
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "toc", pageTitle: "Table of Contents" };
     const toc = await generatePageJson(systemPrompt, buildTocPrompt(input, topics), input.level);
@@ -294,13 +314,12 @@ export async function* generateBook(
   }
   pageIndex++;
 
-  // 4. Lessons
+  // Lessons
   for (let i = 0; i < topics.length; i++) {
     if (opts.signal?.aborted) return;
     const topic = topics[i];
     const lessonNum = i + 1;
 
-    // Lesson
     if (shouldGen()) {
       yield { type: "page-start", pageIndex, pageType: "lesson", pageTitle: `Lesson ${lessonNum}: ${topic}` };
       const lesson = await generatePageJson(systemPrompt, buildLessonPrompt(input, topic, lessonNum), input.level);
@@ -308,7 +327,6 @@ export async function* generateBook(
     }
     pageIndex++;
 
-    // Exercise
     if (shouldGen()) {
       yield { type: "page-start", pageIndex, pageType: "exercise", pageTitle: `Exercise ${lessonNum}` };
       const exercise = await generatePageJson(systemPrompt, buildExercisePrompt(input, topic, lessonNum), input.level);
@@ -316,7 +334,6 @@ export async function* generateBook(
     }
     pageIndex++;
 
-    // Homework
     if (shouldGen()) {
       yield { type: "page-start", pageIndex, pageType: "homework", pageTitle: `Homework ${lessonNum}` };
       const hw = await generatePageJson(systemPrompt, buildHomeworkPrompt(input, topic, lessonNum), input.level);
@@ -325,7 +342,7 @@ export async function* generateBook(
     pageIndex++;
   }
 
-  // 5. Glossary
+  // Glossary
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "glossary", pageTitle: "Glossary" };
     const glossary = await generatePageJson(systemPrompt, buildGlossaryPrompt(input), input.level);
@@ -333,7 +350,7 @@ export async function* generateBook(
   }
   pageIndex++;
 
-  // 6. Closing
+  // Closing
   if (shouldGen()) {
     yield { type: "page-start", pageIndex, pageType: "closing", pageTitle: "Well Done!" };
     const closing = await generatePageJson(systemPrompt, buildClosingPrompt(input), input.level);
@@ -344,7 +361,6 @@ export async function* generateBook(
   yield { type: "complete", message: `Generated ${pageIndex} pages.` };
 }
 
-// Condensing plan (kept for compatibility)
 export function planCondensing(targetPages: number, topics: string[]) {
   const available = Math.max(0, targetPages - FIXED_PAGES);
   if (available >= 3 * topics.length) return { mode: "full" as GenerationMode, lessonsToGenerate: topics.length, topicsToUse: topics, pagesPerLesson: 3, estimatedTotalPages: FIXED_PAGES + 3 * topics.length, description: "Full mode" };

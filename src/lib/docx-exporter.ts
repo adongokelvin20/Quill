@@ -170,46 +170,22 @@ async function blockToDocx(
       ];
 
     case "image": {
-      const img = await fetchImageBuffer(block.url);
-      if (!img) {
-        // Fallback: show alt text in a bordered box
-        return [
-          new Paragraph({
-            children: [new TextRun({ text: `[Image: ${block.alt}]`, italics: true, color: "999999", size: bodySize, font: body })],
-            alignment: AlignmentType.CENTER,
-            spacing: { before: 120, after: 120 },
-          }),
-        ];
-      }
-      const ext = img.mime.includes("jpeg") || img.mime.includes("jpg") ? "jpg" : img.mime.includes("png") ? "png" : "png";
-      const widthPx = Math.min(block.width ?? 400, 480);
-      // Convert px to a sensible EMU size (assume 96 DPI -> width in inches = px/96)
-      const widthInches = widthPx / 96;
-      const heightInches = widthInches; // assume square unless overridden
-      const imageRun = new ImageRun({
-        data: img.buffer,
-        transformation: { width: widthInches * 96, height: heightInches * 96 },
-        type: ext as "jpg" | "png",
-      });
-      const align =
-        block.align === "left" ? AlignmentType.LEFT : block.align === "right" ? AlignmentType.RIGHT : AlignmentType.CENTER;
-      const paras: (Paragraph | Table)[] = [
+      // Skip fetching images — just show the alt text as a placeholder.
+      // Fetching images from Pollinations causes timeouts on Vercel.
+      // Images are visible in the web editor; the DOCX just shows a description.
+      return [
         new Paragraph({
-          children: [imageRun],
-          alignment: align,
-          spacing: { before: 120, after: 60 },
+          children: [new TextRun({ text: `[Illustration: ${block.alt}]`, italics: true, color: "888888", size: bodySize, font: body })],
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 120, after: 120 },
+          border: {
+            top: { style: "single", size: 4, color: "CCCCCC" },
+            bottom: { style: "single", size: 4, color: "CCCCCC" },
+            left: { style: "single", size: 4, color: "CCCCCC" },
+            right: { style: "single", size: 4, color: "CCCCCC" },
+          },
         }),
       ];
-      if (block.caption) {
-        paras.push(
-          new Paragraph({
-            children: [new TextRun({ text: block.caption, italics: true, color: "666666", size: Math.round(bodySize * 0.85), font: body })],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 120 },
-          })
-        );
-      }
-      return paras;
     }
 
     case "image-caption":
