@@ -1,44 +1,30 @@
 // Quill — LLM helper.
-// Primary: Google Gemini API
-// Fallback: Pollinations text API (free, no key needed)
+// Uses Google Gemini API with multiple model fallbacks.
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "";
-const GEMINI_MODEL = "gemini-3.6-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
 }
 
+// Models to try in order — first that works wins
+const MODELS = [
+  { name: "gemini-2.0-flash", thinking: false },
+  { name: "gemini-1.5-flash", thinking: false },
+  { name: "gemini-pro", thinking: false },
+  { name: "gemini-3.6-flash", thinking: true },
+];
+
 export async function callLLM(
   messages: ChatMessage[],
   maxTokens = 2000,
   temperature = 0.7
 ): Promise<string> {
-  // Try Gemini first
-  if (GEMINI_KEY) {
-    try {
-      return await callGemini(messages, maxTokens, temperature);
-    } catch (e) {
-      const err = e instanceof Error ? e.message : String(e);
-      console.error("[quill] Gemini error:", err.slice(0, 100));
-      // If it's a 429 (quota) or 404 (model), fall through to Pollinations
-      if (!err.includes("429") && !err.includes("404")) {
-        throw e; // Re-throw other errors
-      }
-    }
+  if (!GEMINI_KEY) {
+    throw new Error("GEMINI_API_KEY is not set.");
   }
 
-  // Fallback: Pollinations text API (free, no key, publicly accessible)
-  return await callPollinations(messages, maxTokens, temperature);
-}
-
-async function callGemini(
-  messages: ChatMessage[],
-  maxTokens: number,
-  temperature: number
-): Promise<string> {
   const systemMsg = messages.find(m => m.role === "system")?.content ?? "";
   const contents = messages
     .filter(m => m.role !== "system")
@@ -47,61 +33,55 @@ async function callGemini(
       parts: [{ text: m.content }],
     }));
 
-  const body: any = {
-    contents,
-    generationConfig: {
-      temperature,
-      maxOutputTokens: maxTokens + 2000,
-      thinkingConfig: { thinkingBudget: 0 },
-    },
-  };
-  if (systemMsg) {
-    body.systemInstruction = { parts: [{ text: systemMsg }] };
+  let lastError = "";
+  for (const model of MODELS) {
+    try {
+      const body: any = {
+        contents,
+        generationConfig: {
+          temperature,
+          maxOutputTokens: model.thinking ? maxTokens + 3000 : maxTokens,
+        },
+      };
+      if (model.thinking) {
+        body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      }
+      if (systemMsg) {
+        body.systemInstruction = { parts: [{ text: systemMsg }] };
+      }
+
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model.name}:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        lastError = `Gemini ${model.name} ${res.status}: ${text.slice(0, 150)}`;
+        console.error(`[quill] ${lastError}`);
+        if (res.status === 404) continue; // Model not found, try next
+        if (res.status === 429) continue; // Quota exceeded, try next
+        throw new Error(lastError); // Other error, stop
+      }
+
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      if (!text) {
+        const reason = data.promptFeedback?.blockReason ?? data.candidates?.[0]?.finishReason ?? "unknown";
+        lastError = `Gemini ${model.name} empty. Reason: ${reason}`;
+        continue;
+      }
+      return text;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+      console.error(`[quill] ${model.name} error:`, lastError.slice(0, 100));
+      continue;
+    }
   }
 
-  const res = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Gemini API ${res.status}: ${text.slice(0, 300)}`);
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  if (!text) {
-    const reason = data.promptFeedback?.blockReason ?? data.candidates?.[0]?.finishReason ?? "unknown";
-    throw new Error(`Gemini empty. Reason: ${reason}`);
-  }
-  return text;
-}
-
-async function callPollinations(
-  messages: ChatMessage[],
-  maxTokens: number,
-  temperature: number
-): Promise<string> {
-  const res = await fetch("https://text.pollinations.ai/openai", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "openai",
-      messages,
-      temperature,
-      max_tokens: maxTokens,
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Pollinations API ${res.status}: ${text.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content ?? "";
-  if (!text) throw new Error("Pollinations returned empty response");
-  return text;
+  throw new Error(`All Gemini models failed. Last: ${lastError}`);
 }
