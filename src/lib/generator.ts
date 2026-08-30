@@ -1,8 +1,7 @@
 // Quill — Book content generator.
-// Uses z-ai-web-dev-sdk. The .z-ai-config file is committed to the repo
-// and available at process.cwd() on Vercel.
+// Uses Google Gemini API (publicly accessible) with Z.ai SDK fallback.
 
-import ZAI from "z-ai-web-dev-sdk";
+import { callLLM } from "@/lib/llm";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
 
@@ -32,14 +31,6 @@ export interface GenerateBookProgress {
 
 const FIXED_PAGES = 4;
 const GLOBAL_MODIFIERS = "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, no text, no watermark";
-
-let zaiInstance: any = null;
-async function getZai() {
-  if (!zaiInstance) {
-    zaiInstance = await ZAI.create();
-  }
-  return zaiInstance;
-}
 
 function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo): string {
   const isKG = level.complexity <= 1;
@@ -111,13 +102,13 @@ function sanitise(page: PageContent): PageContent {
 async function genPage(system: string, user: string, level: LevelInfo): Promise<PageContent> {
   const tryOnce = async () => {
     try {
-      const zai = await getZai();
-      const res = await zai.chat.completions.create({
-        messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        temperature: level.complexity <= 2 ? 0.8 : 0.6,
-        max_tokens: 2000,
-      });
-      return parseJson(res.choices?.[0]?.message?.content ?? "");
+      const raw = await callLLM(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        2000,
+        level.complexity <= 2 ? 0.8 : 0.6
+      );
+      if (!raw || raw.trim().length < 10) return null;
+      return parseJson(raw);
     } catch (e) {
       console.error("[quill] LLM error:", e instanceof Error ? e.message : String(e));
       return null;
@@ -136,12 +127,10 @@ async function genPage(system: string, user: string, level: LevelInfo): Promise<
 
 export async function genMeta(input: GenerateBookInput) {
   try {
-    const zai = await getZai();
-    const res = await zai.chat.completions.create({
-      messages: [{ role: "system", content: "Output JSON only." }, { role: "user", content: `Title for ${input.level.fullLabel} ${input.subject.name} Term ${input.term}. Return {"title":"","subtitle":"","description":""}` }],
-      temperature: 0.7, max_tokens: 300,
-    });
-    const raw = res.choices?.[0]?.message?.content ?? "";
+    const raw = await callLLM(
+      [{ role: "system", content: "Output JSON only." }, { role: "user", content: `Title for ${input.level.fullLabel} ${input.subject.name} Term ${input.term}. Return {"title":"","subtitle":"","description":""}` }],
+      300, 0.7
+    );
     const p = parseJson(raw) as any;
     if (p?.title) return { title: p.title, subtitle: p.subtitle ?? `Term ${input.term} • Quill Series`, description: p.description ?? "" };
   } catch (e) { console.error("[quill] meta error:", e); }
