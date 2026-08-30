@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { callLLM } from "@/lib/llm";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 export async function GET() {
@@ -11,47 +11,38 @@ export async function GET() {
     return NextResponse.json({ success: false, error: "GEMINI_API_KEY not set" });
   }
 
-  // Try each model individually
-  const MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-flash-latest", "gemini-pro"];
-  const results = [];
-
-  for (const model of MODELS) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
-      const res = await fetch(url, {
+  // Just try gemini-2.0-flash with a short timeout
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+      {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: "Say hello" }] }],
           generationConfig: { maxOutputTokens: 20 },
         }),
-      });
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timeout);
 
-      const text = await res.text();
-      results.push({
-        model,
-        status: res.status,
-        ok: res.ok,
-        response: text.slice(0, 200),
-      });
-
-      if (res.ok) break; // Found a working model
-    } catch (e: any) {
-      results.push({ model, error: e?.message ?? String(e) });
-    }
+    const text = await res.text();
+    return NextResponse.json({
+      success: res.ok,
+      status: res.status,
+      model: "gemini-2.0-flash",
+      response: text.slice(0, 500),
+    });
+  } catch (err: any) {
+    return NextResponse.json({
+      success: false,
+      model: "gemini-2.0-flash",
+      error: err?.message ?? String(err),
+      code: err?.code,
+    });
   }
-
-  // Also test the full callLLM function
-  let llmResult = "";
-  try {
-    llmResult = await callLLM([{ role: "user", content: "Say hello" }], 50, 0.7);
-  } catch (e: any) {
-    llmResult = "ERROR: " + (e?.message ?? String(e));
-  }
-
-  return NextResponse.json({
-    keyPreview: GEMINI_KEY.slice(0, 10) + "...",
-    models: results,
-    callLLMResult: llmResult.slice(0, 200),
-  });
 }
