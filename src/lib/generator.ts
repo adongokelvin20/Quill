@@ -69,10 +69,16 @@ Return JSON with type: "cover".`;
 }
 
 function buildTocPrompt(topics: string[]): string {
-  return `Generate a TABLE OF CONTENTS page. List these ${topics.length} lessons:
-${topics.map((t, i) => `${i+1}. ${t}`).join("\n")}
+  return `Generate a TABLE OF CONTENTS page for a textbook.
 
-Use a numbered-list block with the lesson names and page numbers. Return JSON with type: "toc".`;
+List these ${topics.length} lessons:
+${topics.map((t, i) => `Lesson ${i+1}: ${t}`).join("\n")}
+
+Include:
+1. heading: "Table of Contents"
+2. numbered-list: Each lesson with its page number (e.g. "Lesson 1: ${topics[0]} ........... Page 3")
+
+Return JSON with type: "toc".`;
 }
 
 function buildLessonPrompt(input: GenerateBookInput, topic: string, num: number): string {
@@ -180,7 +186,7 @@ async function genPage(system: string, user: string, level: LevelInfo): Promise<
     try {
       const raw = await callLLM(
         [{ role: "system", content: system }, { role: "user", content: user }],
-        3000,
+        4000,
         level.complexity <= 2 ? 0.8 : 0.6
       );
       if (!raw || raw.trim().length < 10) return null;
