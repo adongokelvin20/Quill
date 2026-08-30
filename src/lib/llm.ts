@@ -1,8 +1,8 @@
 // Quill — LLM helper.
-// Uses Google Gemini API (gemini-3.6-flash).
+// Uses Google Gemini API (gemini-1.5-flash-8b).
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "";
-const GEMINI_MODEL = "gemini-3.6-flash";
+const GEMINI_MODEL = "gemini-1.5-flash-8b";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export interface ChatMessage {
@@ -29,7 +29,7 @@ export async function callLLM(
 
   const body: any = {
     contents,
-    generationConfig: { temperature, maxOutputTokens: maxTokens + 1000 },
+    generationConfig: { temperature, maxOutputTokens: maxTokens },
   };
   if (systemMsg) {
     body.systemInstruction = { parts: [{ text: systemMsg }] };

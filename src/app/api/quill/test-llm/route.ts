@@ -11,13 +11,13 @@ export async function GET() {
     return NextResponse.json({ success: false, error: "GEMINI_API_KEY not set" });
   }
 
-  // Just try gemini-3.6-flash with a short timeout
+  // Just try gemini-1.5-flash-8b with a short timeout
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 15000);
     
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${GEMINI_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key=${GEMINI_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -34,13 +34,13 @@ export async function GET() {
     return NextResponse.json({
       success: res.ok,
       status: res.status,
-      model: "gemini-3.6-flash",
+      model: "gemini-1.5-flash-8b",
       response: text.slice(0, 500),
     });
   } catch (err: any) {
     return NextResponse.json({
       success: false,
-      model: "gemini-3.6-flash",
+      model: "gemini-1.5-flash-8b",
       error: err?.message ?? String(err),
       code: err?.code,
     });
