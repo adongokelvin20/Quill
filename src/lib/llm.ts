@@ -1,5 +1,5 @@
 // Quill — LLM helper.
-// Uses Google Gemini API (gemini-3.6-flash).
+// Uses Google Gemini API.
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "";
 const GEMINI_MODEL = "gemini-3.6-flash";
@@ -29,7 +29,12 @@ export async function callLLM(
 
   const body: any = {
     contents,
-    generationConfig: { temperature, maxOutputTokens: maxTokens + 4000, thinkingConfig: { thinkingBudget: -1 } },
+    generationConfig: {
+      temperature,
+      maxOutputTokens: maxTokens + 2000,
+      // Disable thinking to save tokens and speed up response
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   };
   if (systemMsg) {
     body.systemInstruction = { parts: [{ text: systemMsg }] };
@@ -50,7 +55,7 @@ export async function callLLM(
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   if (!text) {
     const reason = data.promptFeedback?.blockReason ?? data.candidates?.[0]?.finishReason ?? "unknown";
-    throw new Error(`Gemini empty response. Reason: ${reason}. Data: ${JSON.stringify(data).slice(0, 300)}`);
+    throw new Error(`Gemini empty. Reason: ${reason}. Data: ${JSON.stringify(data).slice(0, 300)}`);
   }
   return text;
 }
