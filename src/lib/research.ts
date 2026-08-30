@@ -2,9 +2,18 @@
 // Uses z-ai-web-dev-sdk to: (a) search the web, (b) fetch & extract page content.
 // Results are cached in the ScrapedPage table so repeat queries are instant.
 
-// Z.ai SDK removed — using direct API calls instead
-// Config not needed — using direct API
+import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
+
+const ZAI_CONFIG = {
+  baseUrl: "https://internal-api.z.ai/v1",
+  apiKey: "Z.ai",
+  chatId: "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE",
+  userId: "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+};
+let zaiInstance: any = null;
+async function getZai() { if (!zaiInstance) zaiInstance = new ZAI(ZAI_CONFIG); return zaiInstance; }
 
 export interface SearchResult {
   title: string;

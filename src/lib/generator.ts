@@ -1,10 +1,27 @@
 // Quill — Book content generator.
-// Uses z-ai-web-dev-sdk with guaranteed config file availability.
+// Uses z-ai-web-dev-sdk with config passed DIRECTLY (no file loading).
 
-import "@/lib/zai-config"; // MUST be first — writes config file before SDK loads
 import ZAI from "z-ai-web-dev-sdk";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
 import { LevelInfo, SubjectInfo } from "@/lib/curriculum";
+
+// Hardcoded config — same as .z-ai-config file but passed directly to constructor
+const ZAI_CONFIG = {
+  baseUrl: "https://internal-api.z.ai/v1",
+  apiKey: "Z.ai",
+  chatId: "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE",
+  userId: "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+};
+
+// Create ZAI instance with config passed DIRECTLY — bypasses file loading entirely
+let zaiInstance: any = null;
+async function getZai() {
+  if (!zaiInstance) {
+    zaiInstance = new ZAI(ZAI_CONFIG);
+  }
+  return zaiInstance;
+}
 
 export type GenerationMode = "full" | "condensed" | "compact";
 
@@ -35,14 +52,6 @@ const FIXED_PAGES = 4;
 const GLOBAL_ILLUSTRATION_MODIFIERS =
   "high quality children's book illustration, clean bold outlines, vibrant saturated colors, friendly cheerful mood, professional vector art, well composed single focal point, neat and organized layout, no text, no watermark, no signature, no border";
 
-// Cache the ZAI instance
-let zaiInstance: any = null;
-async function getZai() {
-  if (!zaiInstance) {
-    zaiInstance = await ZAI.create();
-  }
-  return zaiInstance;
-}
 
 function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo): string {
   const isKG = level.complexity <= 1;
