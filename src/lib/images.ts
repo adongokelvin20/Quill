@@ -3,8 +3,8 @@
 // 1024x1024 illustrations. Pollinations is used ONLY as a non-blocking fallback
 // URL (the browser loads it on-demand, no server fetch needed).
 
-import ZAI from "z-ai-web-dev-sdk";
-import "@/lib/zai-config"; // Ensure config file exists
+// Z.ai SDK removed — using direct API calls instead
+// Config not needed — using direct API
 import { db } from "@/lib/db";
 
 // ---------------------------------------------------------------------------
@@ -18,49 +18,34 @@ export async function generateImageViaZAI(
   prompt: string,
   opts: { width?: number; height?: number; retries?: number } = {}
 ): Promise<string | null> {
-  const retries = opts.retries ?? 1; // Reduced from 3 to 1 for faster generation
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const zai = await ZAI.create();
-      const sizes = pickZaiSize(opts.width ?? 1024, opts.height ?? 1024);
-
-      // Enhance the prompt for better quality and organization
-      const enhanced = `${prompt}. ${ILLUSTRATION_MODIFIERS}`;
-
-      const res = await zai.images.generations.create({
-        prompt: enhanced,
-        size: sizes,
-      });
-
-      // Z.ai returns base64 in the `base64` field
-      const data = (res as unknown as { data?: Array<{ base64?: string; url?: string; b64_json?: string }> }).data ?? [];
-      const first = data[0];
-      if (!first) {
-        if (attempt < retries) {
-          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-          continue;
-        }
-        return null;
-      }
-
-      // Prefer URL, then base64, then b64_json
-      if (first.url) return first.url;
-      const b64 = first.base64 ?? first.b64_json;
-      if (b64) return `data:image/jpeg;base64,${b64}`;
-      return null;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[quill] Z.ai image generation failed (attempt ${attempt + 1}/${retries + 1}):`, msg);
-      // If rate limited or connection error, wait longer before retry
-      if (attempt < retries) {
-        const wait = msg.includes("429") ? 5000 * (attempt + 1) : 2000 * (attempt + 1);
-        await new Promise((r) => setTimeout(r, wait));
-        continue;
-      }
-      return null;
-    }
+  // Direct API call — no SDK needed
+  try {
+    const ZAI_BASE_URL = "https://internal-api.z.ai/v1";
+    const ZAI_TOKEN = process.env.ZAI_TOKEN ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE";
+    const enhanced = `${prompt}. ${ILLUSTRATION_MODIFIERS}`;
+    const res = await fetch(`${ZAI_BASE_URL}/images/generations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer Z.ai",
+        "X-Z-AI-From": "Z",
+        "X-Chat-Id": "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+        "X-User-Id": "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+        "X-Token": ZAI_TOKEN,
+      },
+      body: JSON.stringify({ prompt: enhanced, size: pickZaiSize(opts.width ?? 1024, opts.height ?? 1024) }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const first = data.data?.[0];
+    if (first?.url) return first.url;
+    if (first?.base64) return `data:image/jpeg;base64,${first.base64}`;
+    if (first?.b64_json) return `data:image/jpeg;base64,${first.b64_json}`;
+    return null;
+  } catch (err) {
+    console.error("[quill] Image generation failed:", err);
+    return null;
   }
-  return null;
 }
 
 function pickZaiSize(w: number, h: number): "1024x1024" | "1024x1792" | "1792x1024" {
@@ -86,10 +71,23 @@ export async function searchImages(
   count = 6
 ): Promise<SearchedImage[]> {
   try {
-    const zai = await ZAI.create();
-    const res = await zai.images.search.create({ query, count });
-    const items = (res as unknown as { items?: SearchedImage[] }).items ?? [];
-    return items.slice(0, count);
+    const ZAI_BASE_URL = "https://internal-api.z.ai/v1";
+    const ZAI_TOKEN = process.env.ZAI_TOKEN ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE";
+    const res = await fetch(`${ZAI_BASE_URL}/images/search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer Z.ai",
+        "X-Z-AI-From": "Z",
+        "X-Chat-Id": "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+        "X-User-Id": "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+        "X-Token": ZAI_TOKEN,
+      },
+      body: JSON.stringify({ query, count }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.items ?? []).slice(0, count);
   } catch {
     return [];
   }

@@ -2,8 +2,8 @@
 // Uses z-ai-web-dev-sdk to: (a) search the web, (b) fetch & extract page content.
 // Results are cached in the ScrapedPage table so repeat queries are instant.
 
-import ZAI from "z-ai-web-dev-sdk";
-import "@/lib/zai-config"; // Ensure config file exists
+// Z.ai SDK removed — using direct API calls instead
+// Config not needed — using direct API
 import { db } from "@/lib/db";
 
 export interface SearchResult {
@@ -26,12 +26,22 @@ export interface ScrapedContent {
  */
 export async function webSearch(query: string, count = 6): Promise<SearchResult[]> {
   try {
-    const zai = await ZAI.create();
-    const res = await zai.web_search.create({ query, count });
-    const items = (res as unknown as { items?: SearchResult[] }).items ?? [];
-    return items.slice(0, count);
-  } catch (err) {
-    console.error("[quill] web_search failed:", err);
+    const res = await fetch("https://internal-api.z.ai/v1/web_search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer Z.ai",
+        "X-Z-AI-From": "Z",
+        "X-Chat-Id": "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+        "X-User-Id": "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+        "X-Token": process.env.ZAI_TOKEN ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE",
+      },
+      body: JSON.stringify({ query, count }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.items ?? []).slice(0, count);
+  } catch {
     return [];
   }
 }
@@ -41,26 +51,28 @@ export async function webSearch(query: string, count = 6): Promise<SearchResult[
  * Cached in the database — repeat fetches within 24h return the cache.
  */
 export async function scrapeUrl(url: string): Promise<ScrapedContent | null> {
-  // Cache check (younger than 24h)
   const cached = await db.scrapedPage.findUnique({ where: { url } });
   if (cached && Date.now() - cached.fetchedAt.getTime() < 24 * 60 * 60 * 1000) {
-    return {
-      url: cached.url,
-      title: cached.title ?? "",
-      content: cached.content,
-      cached: true,
-    };
+    return { url: cached.url, title: cached.title ?? "", content: cached.content, cached: true };
   }
 
   try {
-    const zai = await ZAI.create();
-    const res = await zai.web_reader.create({ url });
-    const data = (res as unknown as { title?: string; html?: string; markdown?: string; text?: string }).data
-      ?? (res as unknown as { title?: string; html?: string; markdown?: string; text?: string });
-
+    const res = await fetch("https://internal-api.z.ai/v1/web_reader", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer Z.ai",
+        "X-Z-AI-From": "Z",
+        "X-Chat-Id": "chat-3b1d9b2f-62ee-4783-913e-141c92180b84",
+        "X-User-Id": "6d4e3818-0e03-4cc9-8f5c-767edc44f1c0",
+        "X-Token": process.env.ZAI_TOKEN ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmQ0ZTM4MTgtMGUwMy00Y2M5LThmNWMtNzY3ZWRjNDRmMWMwIiwiY2hhdF9pZCI6ImNoYXQtM2IxZDliMmYtNjJlZS00NzgzLTkxM2UtMTQxYzkyMTgwYjg0IiwicGxhdGZvcm0iOiJ6YWkifQ.7Rz6iB2sdxskhOVYnLiah48Ij8jin_0GFLYloKbbCOE",
+      },
+      body: JSON.stringify({ url }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
     const title = data.title ?? "";
-    const content = (data.markdown ?? data.text ?? stripHtml(data.html ?? "")).slice(0, 50000);
-
+    const content = (data.markdown ?? data.text ?? "").slice(0, 50000);
     if (!content.trim()) return null;
 
     await db.scrapedPage.upsert({
@@ -68,19 +80,9 @@ export async function scrapeUrl(url: string): Promise<ScrapedContent | null> {
       update: { title, content, fetchedAt: new Date() },
       create: { url, title, content },
     });
-
     return { url, title, content, cached: false };
-  } catch (err) {
-    console.error("[quill] scrapeUrl failed:", err);
-    // Fall back to cache even if stale
-    if (cached) {
-      return {
-        url: cached.url,
-        title: cached.title ?? "",
-        content: cached.content,
-        cached: true,
-      };
-    }
+  } catch {
+    if (cached) return { url: cached.url, title: cached.title ?? "", content: cached.content, cached: true };
     return null;
   }
 }

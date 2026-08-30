@@ -14,7 +14,7 @@ import { getCurrentUserId } from "@/lib/auth";
 import { Block, PageContent, makeId } from "@/lib/blocks";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60; // Vercel Hobby plan max
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
