@@ -189,7 +189,8 @@ async function generatePageJson(systemPrompt: string, userPrompt: string, level:
       if (!raw || raw.trim().length < 10) return null;
       return parsePageJson(raw);
     } catch (err) {
-      console.error("[quill] LLM error:", err);
+      console.error("[quill] LLM error:", err instanceof Error ? err.message : String(err));
+      console.error("[quill] LLM error stack:", err instanceof Error ? err.stack : "no stack");
       return null;
     }
   };
