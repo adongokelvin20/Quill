@@ -168,6 +168,13 @@ export function GeneratorView() {
   };
 
   const startGeneration = async () => {
+    // Ensure we have topics — fall back to curriculum topics if none selected
+    const topicsToUse = allTopics.length > 0 ? allTopics : availableTopics.slice(0, 1);
+    if (topicsToUse.length === 0) {
+      toast.error("Please select at least one topic");
+      return;
+    }
+
     setGenerating(true);
     setProgress({ message: "Starting generation..." });
     setGeneratedPages([]);
@@ -186,7 +193,7 @@ export function GeneratorView() {
         let data: { bookId?: string; status?: string; pages?: number; title?: string; done?: boolean; resume?: boolean; error?: string } = {};
 
         try {
-          // Simple fetch — no AbortController (let the browser handle timeouts naturally)
+          // Simple fetch — no AbortController
           const res = await fetch("/api/quill/generate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -197,7 +204,7 @@ export function GeneratorView() {
                     level,
                     subject,
                     term,
-                    topics: allTopics.length > 0 ? allTopics : ["General introduction"],
+                    topics: topicsToUse,
                     lessons: 1,
                     research: false,
                     useSections: false,
@@ -799,8 +806,11 @@ export function GeneratorView() {
           </Button>
         ) : (
           <Button
-            onClick={startGeneration}
-            disabled={generating || allTopics.length === 0}
+            onClick={() => {
+              console.log("Generate button clicked! allTopics:", allTopics);
+              startGeneration();
+            }}
+            disabled={generating}
             className="bg-quill text-quill-foreground hover:bg-quill/90"
           >
             {generating ? (
@@ -811,7 +821,7 @@ export function GeneratorView() {
             ) : (
               <>
                 <Wand2 className="mr-2 h-4 w-4" />
-                Generate book ({plan.totalPages} pages)
+                Generate book
               </>
             )}
           </Button>
