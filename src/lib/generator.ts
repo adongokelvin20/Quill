@@ -48,7 +48,7 @@ CRITICAL IMAGE RULES:
 - For matching exercises, include images for the items being matched.
 
 AUDIENCE: ${level.fullLabel} (ages ${level.ageRange})
-${isKG ? "KG: very short sentences (3-7 words). Picture-heavy — include 2-3 image blocks per page." : "Short sentences. Include 1-2 image blocks per page."}
+${isKG ? "KG: very short sentences (3-7 words). Picture-heavy — include 3-4 image blocks per page with different illustrations." : "Short sentences. Include 2-3 image blocks per page with different illustrations."}
 Use Ghanaian names (Kwame, Ama, Kofi, Abena), Cedi (GH₵), local foods (banku, jollof, waakye), festivals (Homowo, Aboakyir).
 OUTPUT: Only valid JSON. No markdown fences. Start with { and end with }.`;
 }
@@ -90,13 +90,17 @@ Include these blocks:
 1. heading: "Lesson ${num}: ${topic}"
 2. bulleted-list: 3-4 learning objectives
 3. paragraph: A short introduction to the topic
-4. subheading: A section title for the main content
-5. paragraph: Main teaching content (3-5 sentences)
-6. subheading: Another section
-7. paragraph: More content or examples
-8. image: An illustration that DIRECTLY relates to the lesson topic. Alt text MUST be specific: "A colourful educational diagram showing ${topic.toLowerCase()}, with clear labels and arrows, designed for ${input.level.fullLabel} students, professional children's textbook illustration"
-9. vocabulary: 3-5 key terms with one-sentence meanings
-10. tip: A teaching tip
+4. image: An illustration that DIRECTLY relates to ${topic}. Alt text MUST be specific and detailed.
+5. subheading: A section title for the main content
+6. paragraph: Main teaching content (3-5 sentences)
+7. image: Another illustration showing a concept from the content. Detailed alt text.
+8. subheading: Another section
+9. paragraph: More content or examples
+10. image: A third illustration showing another aspect of the lesson. Detailed alt text.
+11. vocabulary: 3-5 key terms with one-sentence meanings
+12. tip: A teaching tip
+
+Include 3 image blocks total, each with specific alt text describing a different aspect of ${topic}.
 
 Return JSON with type: "lesson".`;
 }
@@ -108,12 +112,15 @@ This is for ${level.fullLabel} students.
 
 Include these blocks:
 1. paragraph: "Name: ___________  Date: ___________"
-2. fill-blanks: 4-5 sentences about ${topic} with blanks (____), include a word bank
-3. multiple-choice: 3-4 questions about ${topic}, each with 4 options (A, B, C, D) and answerIndex
-4. matching: 4-5 pairs related to ${topic}
-5. image: An illustration that shows a KEY CONCEPT from the questions. For example, if a question asks about counting animals, the alt text should be: "A colourful illustration showing different animals (goat, chicken, dog, cat) in a Ghanaian farmyard, clearly visible for counting, children's educational illustration style"
+2. image: An illustration related to ${topic}. Alt text MUST be specific and detailed.
+3. fill-blanks: 4-5 sentences about ${topic} with blanks (____), include a word bank
+4. image: Another illustration showing a key concept from the fill-blanks. Detailed alt text.
+5. multiple-choice: 3-4 questions about ${topic}, each with 4 options (A, B, C, D) and answerIndex
+6. image: An illustration showing one of the multiple-choice question subjects. Detailed alt text.
+7. matching: 4-5 pairs related to ${topic}
+8. image: An illustration showing the items from the matching exercise. Detailed alt text.
 
-IMPORTANT: If any question references a specific object, animal, or scene, include an image block for it with detailed alt text describing that exact object.
+IMPORTANT: Include 3-4 image blocks total. Each image must have detailed alt text describing a SPECIFIC scene related to the content. If a question asks about a goat, include an image of a goat.
 
 Return JSON with type: "exercise".`;
 }
@@ -125,9 +132,13 @@ This is for ${level.fullLabel} students.
 
 Include these blocks:
 1. paragraph: "Name: ___________  Date: ___________"
-2. homework: 4-5 tasks related to ${topic} that students can do at home
-3. fill-blanks: 3-4 sentences about ${topic}
-4. image: An illustration that relates to the homework tasks. Alt text MUST be specific and relevant: "A colourful illustration of a child doing homework at home, with books and pencils on the table, related to ${topic.toLowerCase()}, warm and encouraging children's book art style"
+2. image: An illustration related to ${topic}. Detailed alt text.
+3. homework: 4-5 tasks related to ${topic} that students can do at home
+4. image: An illustration showing one of the homework tasks. Detailed alt text.
+5. fill-blanks: 3-4 sentences about ${topic}
+6. image: An illustration related to the fill-blanks content. Detailed alt text.
+
+Include 3 image blocks total. Each with specific, detailed alt text.
 
 Return JSON with type: "homework".`;
 }

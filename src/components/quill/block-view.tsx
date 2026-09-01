@@ -54,13 +54,10 @@ function ImageBlockView({ block }: { block: Extract<Block, { type: "image" }> })
   const [error, setError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
-  // Route external image URLs through our proxy so the browser sees a same-origin
-  // request. This avoids CORS / Content-Disposition / URL-length issues with
-  // Pollinations and other image APIs.
-  const src =
-    block.url.startsWith("data:") || block.url.startsWith("/")
-      ? block.url
-      : `/api/quill/img?url=${encodeURIComponent(block.url)}`;
+  // Load images directly from the source URL — no proxy needed.
+  // The browser can fetch images from Pollinations directly (img tags have no CORS restriction).
+  // This is faster and doesn't crash the server.
+  const src = block.url;
 
   return (
     <figure
