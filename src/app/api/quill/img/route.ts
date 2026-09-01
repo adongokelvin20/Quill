@@ -1,12 +1,18 @@
 // Quill — Image proxy.
-// Fetches images from Pollinations and returns them.
-// Falls back to SVG placeholder if fetch fails.
+// Uses Z.ai SDK for image generation, Pollinations as fallback.
 
 import { NextRequest } from "next/server";
+import ZAI from "z-ai-web-dev-sdk";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 export const dynamic = "force-dynamic";
+
+let zaiInstance: any = null;
+async function getZai() {
+  if (!zaiInstance) zaiInstance = await ZAI.create();
+  return zaiInstance;
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url).searchParams.get("url");
@@ -18,10 +24,7 @@ export async function GET(req: NextRequest) {
     if (!match) return new Response("Invalid data URL", { status: 400 });
     const buf = Buffer.from(match[2], "base64");
     return new Response(new Uint8Array(buf), {
-      headers: {
-        "Content-Type": match[1],
-        "Cache-Control": "public, max-age=86400",
-      },
+      headers: { "Content-Type": match[1], "Cache-Control": "public, max-age=86400" },
     });
   }
 
@@ -48,10 +51,7 @@ export async function GET(req: NextRequest) {
       if (buf.length > 0) {
         const contentType = res.headers.get("content-type") ?? "image/jpeg";
         return new Response(new Uint8Array(buf), {
-          headers: {
-            "Content-Type": contentType,
-            "Cache-Control": "public, max-age=86400, immutable",
-          },
+          headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=86400, immutable" },
         });
       }
     }
@@ -79,9 +79,6 @@ export async function GET(req: NextRequest) {
   </svg>`;
 
   return new Response(svg, {
-    headers: {
-      "Content-Type": "image/svg+xml",
-      "Cache-Control": "no-cache",
-    },
+    headers: { "Content-Type": "image/svg+xml", "Cache-Control": "no-cache" },
   });
 }

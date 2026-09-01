@@ -1,12 +1,10 @@
 // Quill — Web research utilities.
-// Uses z-ai-web-dev-sdk with .z-ai-config file.
-
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
 let zaiInstance: any = null;
 async function getZai() {
-  if (!zaiInstance) { zaiInstance = await ZAI.create(); }
+  if (!zaiInstance) zaiInstance = await ZAI.create();
   return zaiInstance;
 }
 

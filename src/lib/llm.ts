@@ -1,13 +1,19 @@
 // Quill — LLM helper.
-// Uses Google Gemini API (gemini-3.6-flash with thinking disabled).
+// Uses z-ai-web-dev-sdk (works in sandbox environment).
 
-const GEMINI_KEY = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? "";
-const GEMINI_MODEL = "gemini-3.6-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+import ZAI from "z-ai-web-dev-sdk";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+}
+
+let zaiInstance: any = null;
+async function getZai() {
+  if (!zaiInstance) {
+    zaiInstance = await ZAI.create();
+  }
+  return zaiInstance;
 }
 
 export async function callLLM(
@@ -15,49 +21,18 @@ export async function callLLM(
   maxTokens = 2000,
   temperature = 0.7
 ): Promise<string> {
-  if (!GEMINI_KEY) {
-    throw new Error("GEMINI_API_KEY is not set. Go to Vercel Settings → Environment Variables and add it.");
-  }
-
-  const systemMsg = messages.find(m => m.role === "system")?.content ?? "";
-  const contents = messages
-    .filter(m => m.role !== "system")
-    .map(m => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
-
-  const body: any = {
-    contents,
-    generationConfig: {
+  try {
+    const zai = await getZai();
+    const res = await zai.chat.completions.create({
+      messages,
       temperature,
-      maxOutputTokens: maxTokens + 5000,
-      
-    },
-  };
-  if (systemMsg) {
-    body.systemInstruction = { parts: [{ text: systemMsg }] };
+      max_tokens: maxTokens,
+    });
+    const content = res.choices?.[0]?.message?.content ?? "";
+    if (!content) throw new Error("Z.ai returned empty response");
+    return content;
+  } catch (e) {
+    console.error("[quill] LLM error:", e instanceof Error ? e.message : String(e));
+    throw e;
   }
-
-  const res = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    if (res.status === 429) {
-      throw new Error("Gemini API quota exceeded. Free tier resets daily at midnight Pacific. Create a new key at https://aistudio.google.com/apikey");
-    }
-    throw new Error(`Gemini API ${res.status}: ${text.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  if (!text) {
-    const reason = data.promptFeedback?.blockReason ?? data.candidates?.[0]?.finishReason ?? "unknown";
-    throw new Error(`Gemini returned empty. Reason: ${reason}`);
-  }
-  return text;
 }

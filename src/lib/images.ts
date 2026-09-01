@@ -1,6 +1,4 @@
 // Quill — Image utilities.
-// Uses z-ai-web-dev-sdk with .z-ai-config file (committed to repo).
-
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
@@ -8,7 +6,7 @@ const MODIFIERS = "high quality children's book illustration, clean bold outline
 
 let zaiInstance: any = null;
 async function getZai() {
-  if (!zaiInstance) { zaiInstance = await ZAI.create(); }
+  if (!zaiInstance) zaiInstance = await ZAI.create();
   return zaiInstance;
 }
 
