@@ -31,7 +31,7 @@ export async function callLLM(
     contents,
     generationConfig: {
       temperature,
-      maxOutputTokens: maxTokens,
+      maxOutputTokens: maxTokens + 5000,
       
     },
   };
