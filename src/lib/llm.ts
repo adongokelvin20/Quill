@@ -32,7 +32,7 @@ export async function callLLM(
     generationConfig: {
       temperature,
       maxOutputTokens: maxTokens,
-      thinkingConfig: { thinkingBudget: 0 },
+      
     },
   };
   if (systemMsg) {
