@@ -1,5 +1,5 @@
 // Quill — Book content generator.
-// Uses Z.ai SDK for LLM. Images use Pollinations URLs.
+// Uses Z.ai SDK for LLM. Uses EMOJIS instead of generated images.
 
 import { callLLM } from "@/lib/llm";
 import { Block, PageContent, PageType, makeId } from "@/lib/blocks";
@@ -27,95 +27,114 @@ function buildSystemPrompt(level: LevelInfo, subject: SubjectInfo): string {
 interface PageContent { type: string; title?: string; blocks: Block[]; }
 Block types: heading{text,level?}, subheading{text}, paragraph{text}, image{url:"PLACEHOLDER",alt,caption?}, bulleted-list{items[]}, numbered-list{items[]}, fill-blanks{title,instructions,sentences[],wordBank?[]}, multiple-choice{title,instructions,questions[{question,options[],answerIndex?}]}, matching{title,instructions,pairs[{left,right}]}, vocabulary{title,words[{word,meaning}]}, tip{title?,text}, homework{title,instructions,items[]}, divider{}, spacer{height?}
 
-CRITICAL IMAGE RULES:
-- Every image block MUST have detailed "alt" text. This is used to generate the illustration.
-- Write alt text like a professional illustrator's brief — be VERY specific:
-  "A colourful cartoon of a Ghanaian mother cooking banku in a traditional kitchen, steam rising from the pot, a child watching and learning, warm lighting, professional children's book illustration"
-- NEVER write generic alt text. ALWAYS describe the EXACT scene, objects, and characters.
-- For exercises: if a question asks "How many legs does a goat have?", include an image with alt "A friendly cartoon goat standing in a green field, four legs clearly visible, colourful children's educational illustration"
+WORKSHEET DESIGN RULES — make pages look like colourful educational worksheets:
+- Use EMOJIS throughout the content to make it visual and engaging
+- In paragraphs: "🍎 Apple, 🍌 Banana, 🍇 Grapes — these are fruits we eat!"
+- In fill-blanks: "The 🐐 goat has four legs. The 🐔 chicken has two legs."
+- In multiple-choice: "How many legs does a 🐘 elephant have? A) 2 B) 4 C) 6 D) 8"
+- In matching: match "🍎" with "Fruit", "🥕" with "Vegetable", "🐐" with "Animal"
+- In vocabulary: "🍎 Apple — a round red fruit that grows on trees"
+- In headings: "🔤 Phonics Fun! 🔤"
+- In homework: "Count the 🍌 bananas in your kitchen. Draw 5 ⭐ stars."
+- Use LOTS of emojis — they act as visual elements instead of illustrations
+- For KG: use emojis for EVERY concept (🍎 for apple, 🔤 for letters, 🔢 for numbers)
+- Make exercises look like real worksheets students would fill in
+- Include "Name: ___ Date: ___" at the top of every exercise and homework page
+- Use color-coded activity blocks with clear titles and instructions
 
-DESIGN RULES — make pages look like professional educational worksheets:
-- Use color-coded activity blocks (fill-blanks, multiple-choice, matching) with clear titles
-- Include "Name: ___ Date: ___" fields at the top of exercise and homework pages
-- Space out content with divider blocks between sections
-- Include 2-4 image blocks per page, each showing a specific scene related to the content
-- For KG: use very short sentences (3-7 words), lots of pictures, tracing activities
-- Make exercises look like the worksheets students would fill in
+IMAGE BLOCKS:
+- For image blocks, write alt text that describes the scene WITH emojis
+- Example alt: "🍎🍎🍎 Three red apples in a row, colourful, simple, for children"
+- Example alt: "🐐 A friendly goat standing in green grass, simple cartoon style for kids"
+- The alt text will be used to generate a simple image
 
 AUDIENCE: ${level.fullLabel} (ages ${level.ageRange})
-${isKG ? "KG: very short sentences. Picture-heavy — 3-4 images per page." : "Short sentences. 2-3 images per page."}
+${isKG ? "KG: very short sentences (3-7 words). Use LOTS of emojis. Picture-heavy." : "Short sentences. Use emojis for visual appeal."}
 Use Ghanaian names (Kwame, Ama, Kofi, Abena), Cedi (GH₵), local foods, festivals.
 OUTPUT: Only valid JSON. No markdown fences. Start with { and end with }.`;
 }
 
 function buildCoverPrompt(input: GenerateBookInput): string {
   return `Generate a COVER page for ${input.level.fullLabel} ${input.subject.name}, Term ${input.term}.
-Include: heading (catchy title), subheading ("Term ${input.term} • Quill Series"), paragraph (description), image (alt: "A colourful illustration of Ghanaian children in a classroom learning ${input.subject.name}, with books and educational materials on desks, teacher at blackboard, warm sunlight through window, professional children's book art"), paragraph ("Name: ___________  Class: ___________"), divider, paragraph ("Quill — Bringing intelligent education to life").
+
+Make it colourful and welcoming with emojis:
+1. spacer (height 40)
+2. heading: "📚 ${input.subject.name} Adventures 🌟" (or similar catchy title with emojis)
+3. subheading: "Term ${input.term} • Quill Series 📖"
+4. paragraph: A short fun description with emojis like "Let's learn ${input.subject.name} together! 🎉📖✏️"
+5. image: alt = "Colourful classroom with Ghanaian children learning, books and pencils, 📚✏️🌟, simple bright illustration for children"
+6. paragraph: "Name: ___________  Class: ___________"
+7. divider
+8. paragraph: "Quill — Bringing intelligent education to life 🪶"
+
 Return JSON with type: "cover".`;
 }
 
 function buildTocPrompt(topics: string[]): string {
-  return `Generate a TABLE OF CONTENTS page. List ${topics.length} lessons: ${topics.map((t,i)=>`Lesson ${i+1}: ${t}`).join("\n")}. Include heading "Table of Contents", numbered-list with page numbers, and 2 image blocks with alt text describing children learning scenes. Return JSON with type: "toc".`;
+  return `Generate a TABLE OF CONTENTS page with emojis.
+List ${topics.length} lessons: ${topics.map((t,i)=>`Lesson ${i+1}: ${t}`).join("\n")}
+Include: heading "📋 Table of Contents 📋", numbered-list with lesson names (add emojis like 📖 before each), and 2 image blocks with simple alt text.
+Return JSON with type: "toc".`;
 }
 
 function buildLessonPrompt(input: GenerateBookInput, topic: string, num: number): string {
   return `Generate a LESSON page for Lesson ${num}: ${topic}. This is for ${input.level.fullLabel} ${input.subject.name}.
 
-Make it look like a professional educational page with:
-1. heading: "Lesson ${num}: ${topic}"
-2. bulleted-list: 3-4 learning objectives
-3. paragraph: Short introduction
-4. image: Alt text: "A colourful educational illustration showing ${topic.toLowerCase()}, with clear labels and examples, designed for ${input.level.fullLabel} students, professional children's textbook art"
-5. subheading: Main content section title
-6. paragraph: Teaching content (3-5 sentences)
-7. image: Alt text describing a SPECIFIC example from the lesson (e.g. "A cartoon of Kofi counting mangoes in a basket, showing numbers 1 to 5, colourful, educational")
-8. subheading: Another section
-9. paragraph: More content or examples
-10. image: Alt text for a third illustration related to the topic
-11. vocabulary: 3-5 key terms with meanings
-12. tip: Teaching tip
+Make it look like a colourful worksheet page with LOTS of emojis:
+1. heading: "📖 Lesson ${num}: ${topic} 📚"
+2. bulleted-list: 3-4 learning objectives with emojis (🎯 Learn..., ✏️ Practice..., 🔍 Discover...)
+3. paragraph: Short intro with emojis related to ${topic}
+4. image: alt = "Simple colourful illustration about ${topic.toLowerCase()} with emojis and shapes, for young learners, bright colours"
+5. subheading: "🌟 Main Content 🌟"
+6. paragraph: Teaching content with LOTS of emojis (use 🍎🍌🐐🦁🚗🏠 etc. to illustrate concepts)
+7. image: alt = "Another simple scene about ${topic.toLowerCase()}, with objects and shapes, colourful, educational"
+8. subheading: "📝 Practice 📝"
+9. paragraph: More content with emojis
+10. image: alt = "Third illustration showing an example from the lesson, simple shapes, bright colours"
+11. vocabulary: 3-5 terms with emojis (🍎 Apple — a red fruit)
+12. tip: "💡 Teacher's Tip: ..."
 
-Include 3 image blocks with detailed, specific alt text. Return JSON with type: "lesson".`;
+Include 3 image blocks. Use emojis EVERYWHERE in the text. Return JSON with type: "lesson".`;
 }
 
 function buildExercisePrompt(topic: string, num: number, level: LevelInfo): string {
   return `Generate an EXERCISE page for Lesson ${num}: ${topic}. This is for ${level.fullLabel}.
 
-Make it look like a colourful worksheet with:
+Make it look like a REAL colourful worksheet:
 1. paragraph: "Name: ___________  Date: ___________"
-2. heading: "Exercise ${num}"
-3. image: Alt text: "A colourful illustration related to ${topic.toLowerCase()}, showing the main concept, educational children's book style"
-4. fill-blanks: 4-5 sentences about ${topic} with blanks, include word bank
-5. image: Alt text describing a specific concept from the fill-blanks (e.g. "A cartoon showing different types of plants with labels, colourful, educational")
-6. multiple-choice: 3-4 questions, each with 4 options and answerIndex
-7. image: Alt text for an object from one of the multiple-choice questions (e.g. if a question asks about animals, "A colourful cartoon of a goat, chicken, and dog in a Ghanaian farmyard, clearly visible for counting")
-8. matching: 4-5 pairs related to ${topic}
-9. image: Alt text showing the items from the matching exercise
+2. heading: "✏️ Exercise ${num} ✏️"
+3. image: alt = "Simple colourful worksheet illustration about ${topic.toLowerCase()}, with shapes and objects, bright, for children"
+4. fill-blanks: 4-5 sentences with EMOJIS and blanks (e.g. "The 🐐 goat has ___ legs."), include word bank with emojis
+5. image: alt = "Simple shapes and objects from the exercise, colourful, educational"
+6. multiple-choice: 3-4 questions with EMOJIS (e.g. "How many 🍎 apples are shown? A) 2 B) 3 C) 4 D) 5"), with answerIndex
+7. image: alt = "Objects from the multiple-choice questions shown as simple shapes, colourful"
+8. matching: 4-5 pairs with EMOJIS (match 🍎 with "Fruit", 🥕 with "Vegetable")
+9. image: alt = "Simple matching worksheet items, shapes and colours, educational"
 
-Include 4 image blocks with specific alt text. Return JSON with type: "exercise".`;
+Include 4 image blocks. Use LOTS of emojis. Make it look like a real worksheet. Return JSON with type: "exercise".`;
 }
 
 function buildHomeworkPrompt(topic: string, num: number, level: LevelInfo): string {
   return `Generate a HOMEWORK page for Lesson ${num}: ${topic}. This is for ${level.fullLabel}.
 
-Make it look like a take-home worksheet with:
+Make it look like a take-home worksheet with emojis:
 1. paragraph: "Name: ___________  Date: ___________"
-2. heading: "Homework — Lesson ${num}"
-3. image: Alt text: "A colourful illustration of a child doing homework at home, with books and pencils on the table, related to ${topic.toLowerCase()}, warm and encouraging"
-4. homework: 4-5 tasks students can do at home
-5. image: Alt text showing one of the homework tasks (e.g. "A child counting objects in their kitchen, colourful, educational illustration")
-6. fill-blanks: 3-4 sentences about ${topic}
-7. image: Alt text for a concept from the fill-blanks
+2. heading: "🏠 Homework — Lesson ${num} 📝"
+3. image: alt = "Simple illustration of a child doing homework at home with books and pencils, colourful, for kids"
+4. homework: 4-5 tasks with EMOJIS (e.g. "Count the 🍌 bananas in your kitchen", "Draw 5 ⭐ stars", "Write your name 3 times ✏️")
+5. image: alt = "Simple shapes showing homework activities, colourful, educational"
+6. fill-blanks: 3-4 sentences with EMOJIS and blanks
+7. image: alt = "Objects from the fill-blanks shown as simple shapes, colourful"
 
-Include 3 image blocks with specific alt text. Return JSON with type: "homework".`;
+Include 3 image blocks. Use LOTS of emojis. Return JSON with type: "homework".`;
 }
 
 function buildGlossaryPrompt(subject: SubjectInfo): string {
-  return `Generate a GLOSSARY page for ${subject.name}. 10 terms with meanings. Use vocabulary block. Return JSON with type: "glossary".`;
+  return `Generate a GLOSSARY page for ${subject.name}. 10 terms with meanings and EMOJIS. Use vocabulary block. Example: 🍎 Apple — a round red fruit. Return JSON with type: "glossary".`;
 }
 
 function buildClosingPrompt(): string {
-  return `Generate a CLOSING page. heading "Well Done!", paragraph, quote, tip, image (alt: "Ghanaian children celebrating with books, confetti and stars, joyful, colourful children's book illustration"). Return JSON with type: "closing".`;
+  return `Generate a CLOSING page with emojis. heading "🎉 Well Done! 🌟", paragraph (encouraging with emojis), quote, tip "💡 Keep practising every day! 📚", image (alt: "Ghanaian children celebrating with books and stars 🎉🌟📚, colourful, joyful, simple illustration"). Return JSON with type: "closing".`;
 }
 
 function parseJson(raw: string): PageContent | null {
@@ -132,10 +151,11 @@ function sanitisePage(page: PageContent): PageContent {
   const blocks = (page.blocks ?? []).map((b:any) => b.id ? b : {...b, id: makeId()}) as Block[];
   const resolved = blocks.map((b:any) => {
     if (b.type === "image" && (!b.url || b.url === "PLACEHOLDER")) {
-      const alt = b.alt?.trim() || "children's book illustration";
+      const alt = b.alt?.trim() || "children's worksheet illustration";
       const seed = Math.floor(Math.random() * 1000000);
-      const enc = encodeURIComponent(`${alt}. Professional children's book illustration, vibrant colours, clean bold outlines, high quality vector art, no text, no watermark`.slice(0, 1500));
-      return { ...b, url: `https://image.pollinations.ai/prompt/${enc}?width=1024&height=1024&model=flux&nologo=true&seed=${seed}`, source: "generated" };
+      // Use a simpler prompt for Pollinations — just basic shapes and colours
+      const enc = encodeURIComponent(`${alt}. Simple flat illustration, bright colours, minimal, for children's worksheet, no text, no watermark`.slice(0, 1500));
+      return { ...b, url: `https://image.pollinations.ai/prompt/${enc}?width=512&height=512&model=flux&nologo=true&seed=${seed}`, source: "generated" };
     }
     return b;
   }) as Block[];
@@ -152,7 +172,7 @@ async function genPage(system: string, user: string, level: LevelInfo): Promise<
   };
   let page = await tryOnce();
   if (!page) page = await tryOnce();
-  if (!page) { page = { type:"lesson", title:"Lesson", blocks: [{id:makeId(),type:"heading",text:"Lesson"},{id:makeId(),type:"paragraph",text:"Content could not be generated. Please edit manually."}] }; }
+  if (!page) { page = { type:"lesson", title:"Lesson", blocks: [{id:makeId(),type:"heading",text:"📖 Lesson"},{id:makeId(),type:"paragraph",text:"Content could not be generated. Please edit manually. ✏️"}] }; }
   return sanitisePage(page);
 }
 
