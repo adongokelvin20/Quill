@@ -169,7 +169,7 @@ export function GeneratorView() {
 
   const startGeneration = async () => {
     // Ensure we have topics — fall back to curriculum topics if none selected
-    const topicsToUse = allTopics.length > 0 ? allTopics : availableTopics.slice(0, 1);
+    const topicsToUse = allTopics.length > 0 ? allTopics : availableTopics.slice(0, 3);
     if (topicsToUse.length === 0) {
       toast.error("Please select at least one topic");
       return;

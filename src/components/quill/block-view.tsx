@@ -4,12 +4,12 @@ import { cn } from "@/lib/utils";
 import { useState } from "react";
 
 const ACTIVITY_COLORS = [
-  { border: "border-emerald-400", bg: "bg-emerald-50", text: "text-emerald-700", badge: "bg-emerald-500" },
-  { border: "border-pink-400", bg: "bg-pink-50", text: "text-pink-700", badge: "bg-pink-500" },
-  { border: "border-blue-400", bg: "bg-blue-50", text: "text-blue-700", badge: "bg-blue-500" },
-  { border: "border-violet-400", bg: "bg-violet-50", text: "text-violet-700", badge: "bg-violet-500" },
-  { border: "border-orange-400", bg: "bg-orange-50", text: "text-orange-700", badge: "bg-orange-500" },
-  { border: "border-teal-400", bg: "bg-teal-50", text: "text-teal-700", badge: "bg-teal-500" },
+  { border: "border-emerald-400", bg: "bg-emerald-50", badge: "bg-emerald-500" },
+  { border: "border-pink-400", bg: "bg-pink-50", badge: "bg-pink-500" },
+  { border: "border-blue-400", bg: "bg-blue-50", badge: "bg-blue-500" },
+  { border: "border-violet-400", bg: "bg-violet-50", badge: "bg-violet-500" },
+  { border: "border-orange-400", bg: "bg-orange-50", badge: "bg-orange-500" },
+  { border: "border-teal-400", bg: "bg-teal-50", badge: "bg-teal-500" },
 ];
 function activityColor(i: number) { return ACTIVITY_COLORS[i % ACTIVITY_COLORS.length]; }
 function shuffle<T>(arr: T[]): T[] { const a=[...arr]; for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} if(a.length>1&&a.every((v,i)=>v===arr[i])){[a[0],a[1]]=[a[1],a[0]];} return a; }
@@ -17,24 +17,32 @@ const shuffleCache = new Map<string,string[]>();
 function cachedShuffle(key:string,arr:string[]):string[]{if(shuffleCache.has(key))return shuffleCache.get(key)!;const s=shuffle(arr);shuffleCache.set(key,s);return s;}
 
 function ImageBlockView({ block }: { block: Extract<Block, { type: "image" }> }) {
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
 
   return (
-    <figure className={cn("my-4 flex flex-col items-center")}>
-      <div className="overflow-hidden rounded-xl bg-muted/20 shadow-md ring-1 ring-border/30" style={{ maxWidth: "500px", width: "100%" }}>
+    <figure className="my-4 flex flex-col items-center">
+      <div className="overflow-hidden rounded-xl shadow-md ring-1 ring-border/30" style={{ maxWidth: "500px", width: "100%" }}>
+        {!loaded && !error && (
+          <div className="flex items-center justify-center bg-muted/20" style={{ minHeight: "200px" }}>
+            <span className="text-xs text-muted-foreground animate-pulse">{block.alt?.slice(0, 60) || "Loading image..."}</span>
+          </div>
+        )}
         {error ? (
-          <div className="flex flex-col items-center justify-center gap-2 bg-muted/30 p-8 text-center" style={{ minHeight: "200px" }}>
-            <p className="text-xs text-muted-foreground">{block.alt?.slice(0, 80) || "Image"}</p>
-            <button onClick={() => { setError(false); setRetryKey(k => k + 1); }} className="rounded bg-blue-900/10 px-3 py-1 text-xs text-blue-900 hover:bg-blue-900/20">Retry loading image</button>
+          <div className="flex flex-col items-center justify-center gap-2 bg-muted/20 p-8" style={{ minHeight: "150px" }}>
+            <span className="text-xs text-muted-foreground">{block.alt?.slice(0, 60)}</span>
+            <button onClick={() => { setError(false); setLoaded(false); setRetryKey(k => k + 1); }} className="rounded bg-blue-900/10 px-3 py-1 text-xs text-blue-900 hover:bg-blue-900/20">Retry</button>
           </div>
         ) : (
           <img
             key={`${block.url}-${retryKey}`}
             src={block.url}
             alt={block.alt}
+            referrerPolicy="no-referrer"
+            onLoad={() => setLoaded(true)}
             onError={() => setError(true)}
-            style={{ width: "100%", height: "auto", display: "block" }}
+            style={{ width: "100%", height: "auto", display: loaded ? "block" : "none" }}
             className="rounded-xl"
           />
         )}
@@ -57,7 +65,16 @@ export function BlockView({ block, index, onCover = false }: { block: Block; ind
     case "word-bank": return (<div className="rounded-md border-2 border-amber-400 bg-amber-50 p-3">{block.title && <span className="font-semibold text-amber-800">{block.title}: </span>}<span className="font-bold text-amber-700">{block.words.join("   |   ")}</span></div>);
     case "activity": case "fill-blanks": case "multiple-choice": case "matching": case "tracing": case "homework": {
       const c = activityColor(index);
-      return (<div className={cn("rounded-lg border-2", c.border, c.bg, "p-3")}><div className={cn("mb-2 flex items-center gap-2 rounded-md px-2 py-1 text-white", c.badge)}><span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/30 text-xs font-bold">{index+1}</span><span className="font-display font-bold">{block.title}</span></div>{"instructions" in block && block.instructions && <p className="mb-2 text-xs italic text-foreground/70">{block.instructions}</p>}{block.type === "fill-blanks" && block.wordBank && block.wordBank.length > 0 && (<div className="mb-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-sm"><span className="font-semibold">Word Bank: </span><span className="font-bold text-amber-700">{block.wordBank.join("   |   ")}</span></div>)}{block.type === "fill-blanks" && (<ol className="space-y-2">{block.sentences.map((s,i)=><li key={i} className="text-sm"><span className="font-medium">{i+1}.</span> {s}</li>)}</ol>)}{block.type === "multiple-choice" && (<ol className="space-y-3">{block.questions.map((q,i)=><li key={i}><div className="text-sm font-medium">{i+1}. {q.question}</div><div className="mt-1 grid gap-1 pl-5 sm:grid-cols-2">{q.options.map((opt,oi)=><div key={oi} className={cn("flex items-center gap-1.5 rounded px-2 py-0.5 text-sm", q.answerIndex===oi && "bg-emerald-100 text-emerald-800")}><span className="font-semibold">{String.fromCharCode(65+oi)}.</span><span>{opt}</span></div>)}</div></li>)}</ol>)}{block.type === "matching" && (<div className="grid grid-cols-2 gap-3"><ol className="space-y-1">{block.pairs.map((p,i)=><li key={i} className="text-sm"><span className="font-medium">{i+1}.</span> {p.left}</li>)}</ol><ol className="space-y-1">{cachedShuffle(block.id, block.pairs.map(p=>p.right)).map((r,i)=><li key={i} className="text-sm"><span className="font-medium">{String.fromCharCode(65+i)}.</span> {r}</li>)}</ol></div>)}{block.type === "tracing" && (<div className="space-y-2">{block.items.map((item,i)=><div key={i} className="text-center"><div className="font-display text-3xl text-muted-foreground/40">{item}</div><div className="text-muted-foreground/40">________________________</div></div>)}</div>)}{(block.type === "activity" || block.type === "homework") && (<ol className="space-y-1">{block.items.map((item,i)=><li key={i} className="text-sm"><span className="font-medium">{i+1}.</span> {item}</li>)}</ol>)}</div>);
+      return (<div className={cn("rounded-lg border-2", c.border, c.bg, "p-3")}>
+        <div className={cn("mb-2 flex items-center gap-2 rounded-md px-2 py-1 text-white", c.badge)}><span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/30 text-xs font-bold">{index+1}</span><span className="font-display font-bold">{block.title}</span></div>
+        {"instructions" in block && block.instructions && <p className="mb-2 text-xs italic text-foreground/70">{block.instructions}</p>}
+        {block.type === "fill-blanks" && block.wordBank && block.wordBank.length > 0 && (<div className="mb-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-sm"><span className="font-semibold">Word Bank: </span><span className="font-bold text-amber-700">{block.wordBank.join("   |   ")}</span></div>)}
+        {block.type === "fill-blanks" && (<ol className="space-y-2">{block.sentences.map((s,i)=><li key={i} className="text-sm"><span className="font-medium">{i+1}.</span> {s}</li>)}</ol>)}
+        {block.type === "multiple-choice" && (<ol className="space-y-3">{block.questions.map((q,i)=><li key={i}><div className="text-sm font-medium">{i+1}. {q.question}</div><div className="mt-1 grid gap-1 pl-5 sm:grid-cols-2">{q.options.map((opt,oi)=><div key={oi} className={cn("flex items-center gap-1.5 rounded px-2 py-0.5 text-sm", q.answerIndex===oi && "bg-emerald-100 text-emerald-800")}><span className="font-semibold">{String.fromCharCode(65+oi)}.</span><span>{opt}</span></div>)}</div></li>)}</ol>)}
+        {block.type === "matching" && (<div className="grid grid-cols-2 gap-3"><ol className="space-y-1">{block.pairs.map((p,i)=><li key={i} className="text-sm"><span className="font-medium">{i+1}.</span> {p.left}</li>)}</ol><ol className="space-y-1">{cachedShuffle(block.id, block.pairs.map(p=>p.right)).map((r,i)=><li key={i} className="text-sm"><span className="font-medium">{String.fromCharCode(65+i)}.</span> {r}</li>)}</ol></div>)}
+        {block.type === "tracing" && (<div className="space-y-2">{block.items.map((item,i)=><div key={i} className="text-center"><div className="font-display text-3xl text-muted-foreground/40">{item}</div><div className="text-muted-foreground/40">________________________</div></div>)}</div>)}
+        {(block.type === "activity" || block.type === "homework") && (<ol className="space-y-1">{block.items.map((item,i)=><li key={i} className="text-sm"><span className="font-medium">{i+1}.</span> {item}</li>)}</ol>)}
+      </div>);
     }
     case "vocabulary": return (<table className="w-full border-collapse text-sm"><tbody>{block.words.map((w,i)=><tr key={i}><td className="border border-blue-900/40 bg-blue-50 px-3 py-1.5 font-bold text-blue-900">{w.word}</td><td className="border border-border/60 px-3 py-1.5">{w.meaning}</td></tr>)}</tbody></table>);
     case "quote": return (<blockquote className="border-l-4 border-amber-400 bg-amber-50 px-4 py-2 italic text-blue-900">&ldquo;{block.text}&rdquo;{block.attribution && <span className="block text-right text-xs text-muted-foreground">— {block.attribution}</span>}</blockquote>);
